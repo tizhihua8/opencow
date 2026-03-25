@@ -4,14 +4,14 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.1.x   | :white_check_mark: |
+| 0.3.x   | :white_check_mark: |
 
 ## Reporting a Vulnerability
 
 If you discover a security vulnerability, please report it responsibly:
 
 1. **Do NOT** open a public GitHub issue.
-2. Email **security@opencow.dev** with:
+2. Email **open@opencow.ai** with:
    - A description of the vulnerability
    - Steps to reproduce
    - Potential impact assessment
