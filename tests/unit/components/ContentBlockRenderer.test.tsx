@@ -56,7 +56,7 @@ describe('ContentBlockRenderer', () => {
     expect(screen.getByLabelText('Tool executing')).toBeInTheDocument()
   })
 
-  it('does not render ToolUse spinner when message is not streaming', () => {
+  it('renders ToolUse spinner even when message is not streaming (MCP tool support)', () => {
     const block: ContentBlock = {
       type: 'tool_use',
       id: 'tu-1',
@@ -66,7 +66,10 @@ describe('ContentBlockRenderer', () => {
     render(
       <ContentBlockRenderer block={block} activeToolUseId="tu-1" isMessageStreaming={false} />
     )
-    expect(screen.queryByLabelText('Tool executing')).toBeNull()
+    // isExecuting is now decoupled from isMessageStreaming — spinner shows
+    // whenever activeToolUseId matches block.id (MCP tools execute after
+    // message finalization, so gating on isMessageStreaming would hide them).
+    expect(screen.getByLabelText('Tool executing')).toBeInTheDocument()
   })
 
   it('renders ToolResultBlock content', () => {

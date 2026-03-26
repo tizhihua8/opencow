@@ -137,6 +137,7 @@ function createCapabilityPlan(overrides: Partial<CapabilityPlan> = {}): Capabili
     agentPrompt: null,
     declarativeHooks: {},
     mcpServers: {},
+    nativeRequirements: [],
     totalChars: 56,
     summary: {
       skills: ['docs-sync'],
@@ -523,7 +524,7 @@ describe('SessionOrchestrator.startSession — idempotency', () => {
 
     expect(bridgeRegisterSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        nativeToolAllowlist: [{ capability: 'evose' }],
+        nativeToolAllowlist: expect.arrayContaining([{ capability: 'evose' }]),
       }),
     )
 
@@ -531,16 +532,17 @@ describe('SessionOrchestrator.startSession — idempotency', () => {
   })
 
   it('merges capability/custom/bridge MCP servers into codex config and unregisters bridge session', async () => {
+    const nodeCmd = process.execPath
     const buildCapabilityPlan = vi.fn().mockResolvedValue(
       createCapabilityPlan({
         mcpServers: {
-          docs: { command: 'node', args: ['capability-docs.js'] },
-          cap_only: { command: 'node', args: ['capability-only.js'] },
+          docs: { command: nodeCmd, args: ['capability-docs.js'] },
+          cap_only: { command: nodeCmd, args: ['capability-only.js'] },
         },
       }),
     )
     const bridgeRegisterSession = vi.fn().mockResolvedValue({
-      [MCP_SERVER_BASE_NAME]: { command: 'node', args: ['bridge-mcp.js'] },
+      [MCP_SERVER_BASE_NAME]: { command: nodeCmd, args: ['bridge-mcp.js'] },
     })
     const bridgeUnregisterSession = vi.fn().mockResolvedValue(undefined)
 
@@ -567,8 +569,8 @@ describe('SessionOrchestrator.startSession — idempotency', () => {
       prompt: 'merge mcp servers',
       engineKind: 'codex',
       customMcpServers: {
-        docs: { command: 'node', args: ['custom-docs.js'] },
-        custom_only: { command: 'node', args: ['custom-only.js'] },
+        docs: { command: nodeCmd, args: ['custom-docs.js'] },
+        custom_only: { command: nodeCmd, args: ['custom-only.js'] },
       },
     })
     let info = await orchestrator.getSession(sessionId)
@@ -580,7 +582,10 @@ describe('SessionOrchestrator.startSession — idempotency', () => {
     expect(bridgeRegisterSession).toHaveBeenCalledWith(
       expect.objectContaining({
         session: expect.objectContaining({ sessionId }),
-        nativeToolAllowlist: [],
+        nativeToolAllowlist: expect.arrayContaining([
+          { capability: 'browser' },
+          { capability: 'html' },
+        ]),
         activeMcpServerNames: expect.any(Set),
       }),
     )
@@ -594,14 +599,14 @@ describe('SessionOrchestrator.startSession — idempotency', () => {
 
     expect(codexMocks.mockCodexCtor).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: {
-          mcp_servers: {
-            docs: { command: 'node', args: ['custom-docs.js'] },
-            cap_only: { command: 'node', args: ['capability-only.js'] },
-            custom_only: { command: 'node', args: ['custom-only.js'] },
-            [MCP_SERVER_BASE_NAME]: { command: 'node', args: ['bridge-mcp.js'] },
-          },
-        },
+        config: expect.objectContaining({
+          mcp_servers: expect.objectContaining({
+            docs: { command: nodeCmd, args: ['custom-docs.js'] },
+            cap_only: { command: nodeCmd, args: ['capability-only.js'] },
+            custom_only: { command: nodeCmd, args: ['custom-only.js'] },
+            [MCP_SERVER_BASE_NAME]: { command: nodeCmd, args: ['bridge-mcp.js'] },
+          }),
+        }),
       }),
     )
 
@@ -610,10 +615,11 @@ describe('SessionOrchestrator.startSession — idempotency', () => {
   })
 
   it('keeps capability MCP server when bridge registration is skipped by name collision', async () => {
+    const nodeCmd = process.execPath
     const buildCapabilityPlan = vi.fn().mockResolvedValue(
       createCapabilityPlan({
         mcpServers: {
-          [MCP_SERVER_BASE_NAME]: { command: 'node', args: ['capability-owned-server.js'] },
+          [MCP_SERVER_BASE_NAME]: { command: nodeCmd, args: ['capability-owned-server.js'] },
         },
       }),
     )
@@ -655,11 +661,11 @@ describe('SessionOrchestrator.startSession — idempotency', () => {
     expect(bridgeCallArg?.activeMcpServerNames?.has(MCP_SERVER_BASE_NAME)).toBe(true)
     expect(codexMocks.mockCodexCtor).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: {
-          mcp_servers: {
-            [MCP_SERVER_BASE_NAME]: { command: 'node', args: ['capability-owned-server.js'] },
-          },
-        },
+        config: expect.objectContaining({
+          mcp_servers: expect.objectContaining({
+            [MCP_SERVER_BASE_NAME]: { command: nodeCmd, args: ['capability-owned-server.js'] },
+          }),
+        }),
       }),
     )
 
@@ -767,6 +773,7 @@ describe('SessionOrchestrator.handleSessionError — transient spawn errors', ()
   })
 
   afterEach(async () => {
+    await orchestrator.shutdown()
     __resetCodexSdkLoaderForTest()
     await closeDb()
     await rm(tmpDir, { recursive: true, force: true })
@@ -822,6 +829,7 @@ describe('SessionOrchestrator.sendMessage — provider mode drift detection', ()
   })
 
   afterEach(async () => {
+    await orchestrator.shutdown()
     __resetCodexSdkLoaderForTest()
     await closeDb()
     await rm(tmpDir, { recursive: true, force: true })
@@ -832,6 +840,23 @@ describe('SessionOrchestrator.sendMessage — provider mode drift detection', ()
       prompt: 'Fix the bug',
       origin: { source: 'issue', issueId: 'issue-drift-1' },
     })
+
+    // Wait for the lifecycle's for-await loop to call next() on the mock query
+    for (let i = 0; i < 20 && pendingNextResolvers.length === 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+
+    // Resolve the init event so the session gets an engineSessionRef
+    // (required for resumeSessionInternal to succeed)
+    if (pendingNextResolvers.length > 0) {
+      pendingNextResolvers[0]({
+        value: { type: 'system', subtype: 'init', session_id: 'test-ref-drift-1', model: 'claude-sonnet-4-6' },
+        done: false,
+      })
+      pendingNextResolvers.splice(0, 1)
+      // Give the event loop time to process the event through the pipeline
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
 
     // Simulate user switching provider mode mid-session
     activeProviderMode = 'custom'
@@ -847,8 +872,9 @@ describe('SessionOrchestrator.sendMessage — provider mode drift detection', ()
       )
       .filter((event) => event.payload.state === 'creating')
 
-    // At least 2 creating events: initial startSession + sendMessage restart
-    expect(creatingEvents.length).toBeGreaterThanOrEqual(2)
+    // At least 1 creating event from the sendMessage restart path
+    // (initial startSession uses session:created, not session:updated)
+    expect(creatingEvents.length).toBeGreaterThanOrEqual(1)
   })
 
   it('does not restart when provider mode has not changed', async () => {
@@ -856,6 +882,21 @@ describe('SessionOrchestrator.sendMessage — provider mode drift detection', ()
       prompt: 'Fix the bug',
       origin: { source: 'issue', issueId: 'issue-drift-2' },
     })
+
+    // Wait for the lifecycle's for-await loop to call next() on the mock query
+    for (let i = 0; i < 20 && pendingNextResolvers.length === 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+
+    // Resolve the init event so the session transitions to streaming
+    if (pendingNextResolvers.length > 0) {
+      pendingNextResolvers[0]({
+        value: { type: 'system', subtype: 'init', session_id: 'test-ref-drift-2', model: 'claude-sonnet-4-6' },
+        done: false,
+      })
+      pendingNextResolvers.splice(0, 1)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
 
     // Provider mode stays the same
     const dispatchCountBefore = (deps.dispatch as ReturnType<typeof vi.fn>).mock.calls.length

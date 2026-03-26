@@ -35,9 +35,10 @@ describe('sessionPolicyPlanner', () => {
     expect(plan.activation.explicitSkillNames).toEqual(['evose:agent_github_iab8p2'])
     expect(plan.activation.requiredNativeAllowlist).toEqual([{ capability: 'evose' }])
     expect(plan.effectivePolicy.tools.native.mode).toBe('allowlist')
-    // issue origin defaults include browser; evose is appended from slash command
+    // issue origin defaults include browser + html; evose is appended from slash command
     expect(plan.effectivePolicy.tools.native.allow).toEqual([
       { capability: 'browser' },
+      { capability: 'html' },
       { capability: 'evose' },
     ])
   })

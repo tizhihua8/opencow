@@ -264,9 +264,12 @@ describe('buildHighlightRuns', () => {
 /* ------------------------------------------------------------------ */
 
 describe('shouldSkipEntry', () => {
-  it('skips hidden files (dot prefix)', () => {
+  it('skips known dot-directories in SKIP_DIRECTORIES', () => {
     expect(shouldSkipEntry('.git')).toBe(true)
-    expect(shouldSkipEntry('.env')).toBe(true)
+  })
+
+  it('does not skip dot-files that are common config files', () => {
+    expect(shouldSkipEntry('.env')).toBe(false)
   })
 
   it('skips known directories', () => {

@@ -171,12 +171,12 @@ describe('ToolProgressRelay', () => {
     expect(onDone).toHaveBeenCalledOnce()
   })
 
-  it('clear does NOT call onDone', () => {
+  it('clear calls onDone for every registered entry', () => {
     const onDone = vi.fn()
     relay.register('tool-use-foo', { onChunk: vi.fn(), onFlush: vi.fn(), throttleMs: 50, onDone })
     relay.emit('tool-use-foo', 'chunk')
     relay.clear()
-    expect(onDone).not.toHaveBeenCalled()
+    expect(onDone).toHaveBeenCalledOnce()
   })
 
   it('re-register does not call onDone of overwritten entry', () => {

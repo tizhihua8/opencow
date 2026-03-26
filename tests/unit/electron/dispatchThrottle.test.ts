@@ -221,14 +221,14 @@ describe('DispatchThrottle', () => {
   // --- Fixed-window semantics (timer not reset by subsequent events) ---------
 
   it('subsequent schedules do NOT reset the timer (fixed-window)', () => {
-    throttle.scheduleMessage()          // t=0: starts 50ms timer
-    vi.advanceTimersByTime(40)          // t=40
-    throttle.scheduleMessage()          // t=40: does NOT restart timer
-    vi.advanceTimersByTime(10)          // t=50: original timer fires
+    throttle.scheduleMessage()          // t=0: starts 16ms timer
+    vi.advanceTimersByTime(10)          // t=10
+    throttle.scheduleMessage()          // t=10: does NOT restart timer
+    vi.advanceTimersByTime(6)           // t=16: original timer fires
     expect(onFlushMessage).toHaveBeenCalledOnce()
 
-    // If the timer were reset at t=40, it would fire at t=90, not t=50
-    vi.advanceTimersByTime(40)          // t=90
+    // If the timer were reset at t=10, it would fire at t=26, not t=16
+    vi.advanceTimersByTime(10)          // t=26
     expect(onFlushMessage).toHaveBeenCalledOnce()  // no extra flush
   })
 

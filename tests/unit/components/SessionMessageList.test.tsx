@@ -171,7 +171,7 @@ describe('SessionMessageList', () => {
     expect(screen.getByText(/Done reading/)).toBeInTheDocument()
   })
 
-  it('does not show tool executing spinner on non-streaming assistant messages', () => {
+  it('shows tool executing spinner on non-streaming assistant messages when activeToolUseId matches', () => {
     const blocks: ContentBlock[] = [
       { type: 'tool_use', id: 'tu-1', name: 'WebSearch', input: { query: 'OpenClaw' } },
       { type: 'tool_result', toolUseId: 'tu-1', content: 'Search query: OpenClaw' },
@@ -184,7 +184,10 @@ describe('SessionMessageList', () => {
       />
     )
 
-    expect(screen.queryByLabelText('Tool executing')).toBeNull()
+    // isExecuting is now decoupled from isMessageStreaming — spinner shows
+    // whenever activeToolUseId matches the block id (e.g. MCP tools execute
+    // after message finalization).
+    expect(screen.getByLabelText('Tool executing')).toBeInTheDocument()
   })
 
   it('collapses in-message tool segments with 2+ tool calls', () => {
@@ -239,7 +242,7 @@ describe('SessionMessageList', () => {
         ]}
       />
     )
-    expect(screen.getByText(/Context compressed/)).toBeInTheDocument()
+    expect(screen.getByText(/Memory optimized/)).toBeInTheDocument()
     expect(screen.getByText(/127k/)).toBeInTheDocument()
   })
 

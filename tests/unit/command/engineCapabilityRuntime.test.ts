@@ -12,6 +12,7 @@ function createPlan(overrides: Partial<CapabilityPlan> = {}): CapabilityPlan {
     agentPrompt: 'You are a reviewer.',
     declarativeHooks: {},
     mcpServers: {},
+    nativeRequirements: [],
     totalChars: 64,
     summary: {
       skills: ['code-review'],

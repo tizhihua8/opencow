@@ -116,8 +116,10 @@ describe('TaskExecutionView', () => {
   // ── Expandable content ───────────────────────────────────────────────────
 
   it('does not show chevron when no expandable content', () => {
-    renderWithTaskEvents(<TaskExecutionView block={makeTaskBlock()} />)
-    // No summary, no resultContent, no progress → no expand toggle
+    // A block with no prompt, no summary, no resultContent, no progress → no expand toggle
+    renderWithTaskEvents(
+      <TaskExecutionView block={makeTaskBlock({ input: { subagent_type: 'Explore', description: 'Search codebase' } })} />,
+    )
     const buttons = screen.getAllByRole('button')
     for (const btn of buttons) {
       expect(btn).not.toHaveAttribute('aria-expanded')
@@ -148,7 +150,7 @@ describe('TaskExecutionView', () => {
       },
     )
     await user.click(screen.getByRole('button', { expanded: false }))
-    expect(screen.getByText('12.5k tokens')).toBeInTheDocument()
+    expect(screen.getByText('12500 tokens')).toBeInTheDocument()
     expect(screen.getByText(/7 tools/)).toBeInTheDocument()
   })
 
@@ -181,7 +183,7 @@ describe('TaskExecutionView', () => {
     )
     await user.click(screen.getByRole('button', { expanded: false }))
     const resultContainer = screen.getByText(/TypeError/).closest('div')
-    expect(resultContainer?.parentElement?.className).toContain('border-red-500')
+    expect(resultContainer?.className).toContain('border-red-500')
   })
 
   // ── Accessibility ─────────────────────────────────────────────────────────

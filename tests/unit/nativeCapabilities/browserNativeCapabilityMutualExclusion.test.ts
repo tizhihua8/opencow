@@ -51,7 +51,7 @@ function getToolNames(capability: BrowserNativeCapability, context: NativeCapabi
   return capability.getToolDescriptors(context).map((t) => t.name)
 }
 
-// ── All 7 built-in browser tool names ───────────────────────────────────
+// ── All 10 built-in browser tool names ──────────────────────────────────
 const ALL_BROWSER_TOOLS = [
   'browser_navigate',
   'browser_click',
@@ -60,6 +60,9 @@ const ALL_BROWSER_TOOLS = [
   'browser_screenshot',
   'browser_scroll',
   'browser_wait',
+  'browser_snapshot',
+  'browser_ref_click',
+  'browser_ref_type',
 ]
 
 const OVERLAPPING_TOOLS = [
@@ -67,11 +70,12 @@ const OVERLAPPING_TOOLS = [
   'browser_click',
   'browser_type',
   'browser_extract',
+  'browser_snapshot',
   'browser_screenshot',
   'browser_wait',
 ]
 
-const RETAINED_TOOLS = ['browser_scroll']
+const RETAINED_TOOLS = ['browser_scroll', 'browser_ref_click', 'browser_ref_type']
 
 // ── Tests ───────────────────────────────────────────────────────────────
 
@@ -88,33 +92,33 @@ describe('BrowserNativeCapability — Chrome DevTools MCP Mutual Exclusion', () 
   // ── Baseline: no external MCP servers ─────────────────────────────
 
   describe('without external MCP servers', () => {
-    it('returns all 7 browser tools', () => {
+    it('returns all 10 browser tools', () => {
       const context = makeContext()
       const tools = getToolNames(capability, context)
 
-      expect(tools).toHaveLength(7)
+      expect(tools).toHaveLength(10)
       for (const name of ALL_BROWSER_TOOLS) {
         expect(tools).toContain(name)
       }
     })
 
-    it('returns all 7 tools when activeMcpServerNames is undefined', () => {
+    it('returns all 10 tools when activeMcpServerNames is undefined', () => {
       const context = makeContext({ activeMcpServerNames: undefined })
       const tools = getToolNames(capability, context)
-      expect(tools).toHaveLength(7)
+      expect(tools).toHaveLength(10)
     })
 
-    it('returns all 7 tools when activeMcpServerNames is empty', () => {
+    it('returns all 10 tools when activeMcpServerNames is empty', () => {
       const context = makeContext({ activeMcpServerNames: new Set() })
       const tools = getToolNames(capability, context)
-      expect(tools).toHaveLength(7)
+      expect(tools).toHaveLength(10)
     })
   })
 
   // ── Mutual exclusion: chrome-devtools active ──────────────────────
 
   describe('with chrome-devtools MCP active', () => {
-    it('suppresses 6 overlapping tools', () => {
+    it('suppresses 7 overlapping tools', () => {
       const context = makeContext({
         activeMcpServerNames: new Set(['chrome-devtools']),
       })
@@ -134,24 +138,24 @@ describe('BrowserNativeCapability — Chrome DevTools MCP Mutual Exclusion', () 
       expect(tools).toEqual(RETAINED_TOOLS)
     })
 
-    it('returns exactly 1 tool when chrome-devtools is active', () => {
+    it('returns exactly 3 tools when chrome-devtools is active', () => {
       const context = makeContext({
         activeMcpServerNames: new Set(['chrome-devtools']),
       })
       const tools = getToolNames(capability, context)
-      expect(tools).toHaveLength(1)
+      expect(tools).toHaveLength(3)
     })
   })
 
   // ── Other MCP servers: no mutual exclusion ────────────────────────
 
   describe('with unrelated MCP servers', () => {
-    it('returns all 7 tools when other MCP servers are active', () => {
+    it('returns all 10 tools when other MCP servers are active', () => {
       const context = makeContext({
         activeMcpServerNames: new Set(['some-other-server', 'another-mcp']),
       })
       const tools = getToolNames(capability, context)
-      expect(tools).toHaveLength(7)
+      expect(tools).toHaveLength(10)
     })
 
     it('still suppresses when chrome-devtools is among other servers', () => {
@@ -160,7 +164,7 @@ describe('BrowserNativeCapability — Chrome DevTools MCP Mutual Exclusion', () 
       })
       const tools = getToolNames(capability, context)
 
-      expect(tools).toHaveLength(1)
+      expect(tools).toHaveLength(3)
       expect(tools).toEqual(RETAINED_TOOLS)
     })
   })
@@ -185,7 +189,7 @@ describe('BrowserNativeCapability — Chrome DevTools MCP Mutual Exclusion', () 
       const context = makeContext()
       const tools = capability.getToolDescriptors(context)
 
-      expect(tools).toHaveLength(7)
+      expect(tools).toHaveLength(10)
       for (const tool of tools) {
         expect(tool.name).toBeTruthy()
         expect(typeof tool.name).toBe('string')

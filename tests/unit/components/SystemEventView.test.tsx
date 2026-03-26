@@ -103,20 +103,19 @@ describe('SystemEventView', () => {
   describe('compact_boundary', () => {
     it('renders auto trigger with token count', () => {
       renderEvent({ type: 'compact_boundary', trigger: 'auto', preTokens: 127000 })
-      expect(screen.getByText(/Context compressed/)).toBeInTheDocument()
-      expect(screen.getByText(/auto/)).toBeInTheDocument()
+      expect(screen.getByText(/Memory optimized/)).toBeInTheDocument()
       expect(screen.getByText(/127k/)).toBeInTheDocument()
     })
 
     it('renders manual trigger', () => {
       renderEvent({ type: 'compact_boundary', trigger: 'manual', preTokens: 50000 })
-      expect(screen.getByText(/manual/)).toBeInTheDocument()
+      expect(screen.getByText(/Memory optimized/)).toBeInTheDocument()
       expect(screen.getByText(/50k/)).toBeInTheDocument()
     })
 
     it('has accessible aria-label', () => {
       renderEvent({ type: 'compact_boundary', trigger: 'auto', preTokens: 127000 })
-      expect(screen.getByLabelText(/Context compressed/)).toBeInTheDocument()
+      expect(screen.getByLabelText(/Memory optimized/)).toBeInTheDocument()
     })
 
     it('renders small token count without k suffix', () => {

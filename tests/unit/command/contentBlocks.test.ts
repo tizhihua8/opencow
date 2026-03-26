@@ -147,11 +147,13 @@ describe('normalizeContentBlocks', () => {
       isError: false
     })
     // Image is extracted as a standalone ImageBlock after the tool_result
+    // toolUseId is stamped for provenance (context-aware rendering)
     expect(result[1]).toEqual({
       type: 'image',
       mediaType: 'image/png',
       data: 'abc',
-      sizeBytes: expect.any(Number)
+      sizeBytes: expect.any(Number),
+      toolUseId: 'tu-2'
     })
   })
 
