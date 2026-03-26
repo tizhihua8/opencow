@@ -28,6 +28,10 @@ ship in parallel. For every team.
 
 ---
 
+<div align="center">
+<img src="resources/issues-preview-light.png" alt="OpenCow Issues Preview" width="820" />
+</div>
+
 ## How It Works
 
 ### Task In. Result Out.

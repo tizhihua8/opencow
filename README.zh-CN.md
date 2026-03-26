@@ -28,6 +28,10 @@
 
 ---
 
+<div align="center">
+<img src="resources/issues-preview-light.png" alt="OpenCow Issues Preview" width="820" />
+</div>
+
 ## 工作原理
 
 ### 任务进，结果出。
