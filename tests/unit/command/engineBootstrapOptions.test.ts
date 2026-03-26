@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('electron', () => ({
+  app: {
+    isPackaged: false,
+  },
+}))
 import type { ManagedSessionRuntimeConfig } from '../../../electron/command/managedSession'
 import {
   EngineBootstrapRegistry,

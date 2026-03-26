@@ -2,6 +2,7 @@
 
 import { existsSync } from 'node:fs'
 import path from 'node:path'
+import { app } from 'electron'
 import type { AIEngineKind, CodexReasoningEffort } from '../../src/shared/types'
 import type { ManagedSessionRuntimeConfig } from './managedSession'
 import type { SessionLaunchOptions } from './sessionLaunchOptions'
@@ -220,6 +221,22 @@ function resolveCodexSandboxMode(
   return 'workspace-write'
 }
 
+/**
+ * Resolve the path to the pre-bundled sdk-externals directory.
+ * In production it's shipped as an extraResource; in dev it's in resources/.
+ */
+function resolveSdkExternalsDir(): string | undefined {
+  const SDK_EXTERNALS = 'sdk-externals'
+  const candidates = app.isPackaged
+    ? [path.join(process.resourcesPath, SDK_EXTERNALS)]
+    : [path.join(__dirname, '../../resources', SDK_EXTERNALS)]
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate
+  }
+  return undefined
+}
+
 class ClaudeEngineBootstrapper implements EngineBootstrapper {
   private readonly resolveCliPath: () => string | undefined
 
@@ -230,6 +247,16 @@ class ClaudeEngineBootstrapper implements EngineBootstrapper {
   async apply(ctx: EngineBootstrapContext): Promise<void> {
     const cliPath = this.resolveCliPath()
     if (cliPath) ctx.options.pathToClaudeCodeExecutable = cliPath
+
+    // The SDK's cli.js has external require() calls (ajv, ajv-formats) that are
+    // NOT bundled. In the packaged app these modules live inside app.asar, which
+    // the child node process cannot read. We ship pre-bundled copies as an
+    // extraResource and add the path to NODE_PATH so require() can find them.
+    const sdkExternals = resolveSdkExternalsDir()
+    if (sdkExternals) {
+      const existing = ctx.sessionEnv.NODE_PATH
+      ctx.sessionEnv.NODE_PATH = existing ? `${sdkExternals}${path.delimiter}${existing}` : sdkExternals
+    }
   }
 }
 

@@ -792,7 +792,14 @@ export class SessionOrchestrator {
     let streamEndedCleanly = false
 
     try {
-      const runtimeEventStream = lifecycle.start(initialPrompt, toSdkOptions(options))
+      const sdkOpts = toSdkOptions(options)
+      sdkOpts.stderr = (data: string) => {
+        for (const line of data.split('\n')) {
+          const trimmed = line.trimEnd()
+          if (trimmed) log.warn(`[sdk:stderr] ${trimmed}`, { sessionId })
+        }
+      }
+      const runtimeEventStream = lifecycle.start(initialPrompt, sdkOpts)
       for await (const runtimeEvent of runtimeEventStream) {
         const projectionResult = pipeline.applyRuntimeEvent({
           runtimeEvent,

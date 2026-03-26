@@ -10,6 +10,7 @@ package-lock.json
 dist/
 build/
 resources/codex-bridge-deps.cjs
+resources/sdk-externals/
 .next/
 out/
 index.js

@@ -140,6 +140,10 @@
       {
         "from": "resources/codex-bridge-deps.cjs",
         "to": "codex-bridge-deps.cjs"
+      },
+      {
+        "from": "resources/sdk-externals",
+        "to": "sdk-externals"
       }
     ],
     "mac": {
