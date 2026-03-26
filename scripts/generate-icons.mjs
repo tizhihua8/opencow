@@ -15,7 +15,7 @@
  *   - python3 + Pillow (`pip3 install Pillow`)
  *
  * Generated outputs:
- *   resources/icon.icns        — macOS .app bundle icon (full-bleed, no padding)
+ *   resources/icon.icns        — macOS .app bundle icon (with rounded rect + padding, matching icon.png)
  *   resources/icon.png         — BrowserWindow icon / dev dock icon (with padding + rounded rect)
  *   resources/icon-dev.icns    — dev build .icns (same as icon.icns; swap for badged version later)
  *   resources/icon-dev.png     — dev build .png  (same as icon.png; swap for badged version later)
@@ -105,21 +105,7 @@ if crop.size[0] != crop.size[1]:
 CANVAS = 1024
 RADIUS = 220
 
-# 1. icon_for_icns.png — Full-bleed (NO padding, NO transparency)
-COW_PAD_ICNS = int(CANVAS * 0.14)
-icns_icon = Image.new("RGBA", (CANVAS, CANVAS), (255, 255, 255, 255))
-cow_icns = crop.resize((CANVAS - COW_PAD_ICNS * 2,) * 2, Image.LANCZOS)
-icns_icon.paste(cow_icns, (COW_PAD_ICNS, COW_PAD_ICNS), cow_icns)
-px = icns_icon.load()
-for y in range(CANVAS):
-    for x in range(CANVAS):
-        r, g, b, a = px[x, y]
-        if a < 255:
-            px[x, y] = (r, g, b, 255)
-icns_icon.save(os.path.join(tmp_dir, "icon_for_icns.png"))
-print("  ✓ icon_for_icns.png (full-bleed, 0 transparent pixels)")
-
-# 2. icon.png — With padding + rounded rect + shadow
+# 1. icon.png — With padding + rounded rect + shadow (also used for .icns)
 SHAPE = 824
 MARGIN = (CANVAS - SHAPE) // 2
 SHAPE_RADIUS = int(RADIUS * SHAPE / CANVAS)
@@ -140,7 +126,8 @@ png_icon.paste(cow_png, (MARGIN + COW_PAD_PNG, MARGIN + COW_PAD_PNG), cow_png)
 png_icon.save(os.path.join(res_dir, "icon.png"))
 png_icon.save(os.path.join(res_dir, "icon-dev.png"))
 png_icon.save(os.path.join(renderer_assets, "app-icon.png"))
-print("  ✓ icon.png, icon-dev.png, app-icon.png (with padding)")
+print("  ✓ icon.png, icon-dev.png, app-icon.png (with rounded rect + padding)")
+print("    (icon.png will also be used as .icns source)")
 
 # 3. tray.png / tray@2x.png — Colored menu bar icon
 TRAY_PADDING_RATIO = 0.15
@@ -167,13 +154,16 @@ try {
   process.exit(1)
 }
 
-// Step 2: Generate .icns from the full-bleed PNG using macOS native tools
+// Step 2: Generate .icns from icon.png (rounded rect) using macOS native tools
 console.log('🔨 Building .icns with sips + iconutil\n')
 
 const iconsetDir = join(TMP, 'icon.iconset')
 ensureDir(iconsetDir)
 
-const icnsSrc = join(TMP, 'icon_for_icns.png')
+// Use the rounded-rect icon.png (with padding + rounded corners) as the .icns source.
+// This ensures the Dock icon has proper rounded corners and matches the standard macOS
+// icon shape, instead of appearing as a full-bleed square.
+const icnsSrc = join(RESOURCES, 'icon.png')
 const sizes = [
   ['icon_16x16.png', 16],
   ['icon_16x16@2x.png', 32],
@@ -201,7 +191,7 @@ cleanDir(TMP)
 
 console.log('✅ Done! All icons generated from single source.\n')
 console.log('Files updated:')
-console.log('  resources/icon.icns        (macOS bundle — full-bleed, no padding)')
+console.log('  resources/icon.icns        (macOS bundle — rounded rect with padding)')
 console.log('  resources/icon-dev.icns    (dev macOS bundle)')
 console.log('  resources/icon.png         (BrowserWindow / dev dock — with padding)')
 console.log('  resources/icon-dev.png     (dev BrowserWindow)')
