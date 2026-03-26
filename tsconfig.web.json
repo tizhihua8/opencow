@@ -14,6 +14,7 @@
     "paths": {
       "@/*": ["./src/renderer/*"],
       "@shared/*": ["./src/shared/*"],
+      "@resources/*": ["./resources/*"],
       "beautiful-mermaid": ["./src/renderer/types/beautiful-mermaid.d.ts"]
     }
   },

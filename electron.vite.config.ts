@@ -54,10 +54,16 @@ export default defineConfig({
     resolve: {
       alias: {
         '@': resolve(__dirname, 'src/renderer'),
-        '@shared': resolve(__dirname, 'src/shared')
+        '@shared': resolve(__dirname, 'src/shared'),
+        '@resources': resolve(__dirname, 'resources')
       }
     },
     define: sharedDefine,
-    plugins: [tailwindcss(), react()]
+    plugins: [tailwindcss(), react()],
+    server: {
+      fs: {
+        allow: [resolve(__dirname, '.'), resolve(__dirname, 'resources')]
+      }
+    }
   }
 })

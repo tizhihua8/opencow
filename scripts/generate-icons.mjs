@@ -4,7 +4,9 @@
  * generate-icons.mjs
  *
  * Single Source of Truth icon pipeline.
- * Generates ALL icon variants from one source image: resources/logo-source.png
+ * Generates ALL icon variants from source images:
+ *   - resources/logo-source.png     → production icons
+ *   - resources/logo-source-dev.png → dev build icons (dark background for visual distinction)
  *
  * Usage:
  *   node scripts/generate-icons.mjs
@@ -15,13 +17,16 @@
  *   - python3 + Pillow (`pip3 install Pillow`)
  *
  * Generated outputs:
- *   resources/icon.icns        — macOS .app bundle icon (with rounded rect + padding, matching icon.png)
- *   resources/icon.png         — BrowserWindow icon / dev dock icon (with padding + rounded rect)
- *   resources/icon-dev.icns    — dev build .icns (same as icon.icns; swap for badged version later)
- *   resources/icon-dev.png     — dev build .png  (same as icon.png; swap for badged version later)
+ *   resources/icon.icns        — macOS .app bundle icon (full-bleed, system applies squircle mask)
+ *   resources/icon.png         — BrowserWindow / dev Dock icon (pre-masked squircle + padding)
+ *   resources/icon-dev.icns    — dev build .icns (full-bleed, dark bg, from logo-source-dev.png)
+ *   resources/icon-dev.png     — dev Dock icon (pre-masked squircle, dark bg)
  *   resources/tray.png         — menu bar tray icon 22×22 (colored, cropped)
  *   resources/tray@2x.png      — menu bar tray icon 44×44 (colored, cropped, Retina)
- *   src/renderer/assets/app-icon.png — About dialog icon (= icon.png)
+ *
+ * NOTE: .icns files are full-bleed — macOS applies squircle mask automatically for
+ * bundle icons. .png files have a pre-rendered squircle mask because Electron's
+ * app.dock.setIcon() and BrowserWindow icon do NOT get system masking.
  */
 
 import { execSync } from 'node:child_process'
@@ -33,6 +38,7 @@ const __filename = fileURLToPath(import.meta.url)
 const ROOT = join(dirname(__filename), '..')
 const RESOURCES = join(ROOT, 'resources')
 const SOURCE = join(RESOURCES, 'logo-source.png')
+const SOURCE_DEV = join(RESOURCES, 'logo-source-dev.png')
 const TMP = join(ROOT, '.tmp-icons')
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -64,8 +70,6 @@ console.log('🎨 Generating icon variants from resources/logo-source.png\n')
 cleanDir(TMP)
 ensureDir(TMP)
 
-const rendererAssets = join(ROOT, 'src', 'renderer', 'assets')
-
 // Step 1: Write Python script to temp file and execute
 const pyScript = join(TMP, 'gen.py')
 writeFileSync(pyScript, `
@@ -75,7 +79,6 @@ from PIL import Image, ImageDraw, ImageFilter
 src_path = sys.argv[1]
 tmp_dir  = sys.argv[2]
 res_dir  = sys.argv[3]
-renderer_assets = sys.argv[4]
 
 src = Image.open(src_path).convert("RGBA")
 
@@ -103,31 +106,59 @@ if crop.size[0] != crop.size[1]:
     crop = c
 
 CANVAS = 1024
-RADIUS = 220
 
-# 1. icon.png — With padding + rounded rect + shadow (also used for .icns)
+# ── macOS squircle mask (continuous-curvature rounded rect) ──
+# Apple's icon grid: 824×824 shape centered in 1024×1024 canvas (~100px margin).
+# The squircle radius is ~185px on the 824 shape.
+# We approximate the system squircle with a high-quality rounded rectangle.
 SHAPE = 824
 MARGIN = (CANVAS - SHAPE) // 2
-SHAPE_RADIUS = int(RADIUS * SHAPE / CANVAS)
-COW_PAD_PNG = int(SHAPE * 0.12)
-png_icon = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
-shadow = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
-ImageDraw.Draw(shadow).rounded_rectangle(
-    [MARGIN, MARGIN + 4, MARGIN + SHAPE, MARGIN + SHAPE + 4],
-    radius=SHAPE_RADIUS, fill=(0, 0, 0, 30))
-png_icon = Image.alpha_composite(png_icon, shadow.filter(ImageFilter.GaussianBlur(8)))
-rect = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
-ImageDraw.Draw(rect).rounded_rectangle(
-    [MARGIN, MARGIN, MARGIN + SHAPE, MARGIN + SHAPE],
-    radius=SHAPE_RADIUS, fill=(255, 255, 255, 255))
-png_icon = Image.alpha_composite(png_icon, rect)
-cow_png = crop.resize((SHAPE - COW_PAD_PNG * 2,) * 2, Image.LANCZOS)
-png_icon.paste(cow_png, (MARGIN + COW_PAD_PNG, MARGIN + COW_PAD_PNG), cow_png)
-png_icon.save(os.path.join(res_dir, "icon.png"))
-png_icon.save(os.path.join(res_dir, "icon-dev.png"))
-png_icon.save(os.path.join(renderer_assets, "app-icon.png"))
-print("  ✓ icon.png, icon-dev.png, app-icon.png (with rounded rect + padding)")
-print("    (icon.png will also be used as .icns source)")
+SHAPE_RADIUS = 185
+
+def make_squircle_mask():
+    """Create a macOS-style squircle alpha mask on a 1024×1024 canvas."""
+    mask = Image.new("L", (CANVAS, CANVAS), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        [MARGIN, MARGIN, MARGIN + SHAPE, MARGIN + SHAPE],
+        radius=SHAPE_RADIUS, fill=255)
+    return mask
+
+def make_full_bleed(content, bg_color):
+    """Create a full-bleed 1024×1024 icon (for .icns, system applies mask).
+    Apple icon grid: content sits within ~18% padding of the canvas,
+    so the main visual occupies ~64% of the total area — matching the
+    proportions of first-party macOS icons (Finder, Safari, etc.)."""
+    icon = Image.new("RGBA", (CANVAS, CANVAS), bg_color)
+    CONTENT_PAD = int(CANVAS * 0.18)
+    CONTENT_SIZE = CANVAS - CONTENT_PAD * 2
+    resized = content.resize((CONTENT_SIZE, CONTENT_SIZE), Image.LANCZOS)
+    icon.paste(resized, (CONTENT_PAD, CONTENT_PAD), resized)
+    return icon
+
+def make_masked_png(full_bleed_icon):
+    """Apply squircle mask to a full-bleed icon (for .png used by app.dock.setIcon)."""
+    mask = make_squircle_mask()
+    result = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
+    result.paste(full_bleed_icon, (0, 0), mask)
+    return result
+
+# 1. Production icon — white background
+full_bleed = make_full_bleed(crop, (255, 255, 255, 255))
+full_bleed.save(os.path.join(tmp_dir, "icon-full-bleed.png"))  # for .icns
+make_masked_png(full_bleed).save(os.path.join(res_dir, "icon.png"))
+print("  ✓ icon.png (squircle-masked, white bg, for dock/BrowserWindow)")
+
+# 2. Dev icon — dark background, separate source
+dev_src_path = sys.argv[4] if len(sys.argv) > 4 else None
+if dev_src_path and os.path.exists(dev_src_path):
+    dev_src = Image.open(dev_src_path).convert("RGBA")
+    dev_full = dev_src.resize((CANVAS, CANVAS), Image.LANCZOS)
+else:
+    dev_full = full_bleed
+    print("    (no dev source found, using production icon as fallback)")
+dev_full.save(os.path.join(tmp_dir, "icon-dev-full-bleed.png"))  # for .icns
+make_masked_png(dev_full).save(os.path.join(res_dir, "icon-dev.png"))
+print("  ✓ icon-dev.png (squircle-masked, dark bg, for dev dock)")
 
 # 3. tray.png / tray@2x.png — Colored menu bar icon
 TRAY_PADDING_RATIO = 0.15
@@ -144,7 +175,7 @@ print("\\n✅ All icon variants generated")
 
 try {
   const result = execSync(
-    `python3 "${pyScript}" "${SOURCE}" "${TMP}" "${RESOURCES}" "${rendererAssets}"`,
+    `python3 "${pyScript}" "${SOURCE}" "${TMP}" "${RESOURCES}" "${SOURCE_DEV}"`,
     { encoding: 'utf-8' },
   )
   console.log(result)
@@ -154,16 +185,15 @@ try {
   process.exit(1)
 }
 
-// Step 2: Generate .icns from icon.png (rounded rect) using macOS native tools
+// Step 2: Generate .icns from icon.png (full-bleed) using macOS native tools
 console.log('🔨 Building .icns with sips + iconutil\n')
 
 const iconsetDir = join(TMP, 'icon.iconset')
 ensureDir(iconsetDir)
 
-// Use the rounded-rect icon.png (with padding + rounded corners) as the .icns source.
-// This ensures the Dock icon has proper rounded corners and matches the standard macOS
-// icon shape, instead of appearing as a full-bleed square.
-const icnsSrc = join(RESOURCES, 'icon.png')
+// Use the full-bleed intermediate (not the masked .png) as the .icns source.
+// macOS 11+ automatically applies a squircle mask and drop shadow to bundle icons.
+const icnsSrc = join(TMP, 'icon-full-bleed.png')
 const sizes = [
   ['icon_16x16.png', 16],
   ['icon_16x16@2x.png', 32],
@@ -183,18 +213,27 @@ for (const [name, size] of sizes) {
 console.log('  ✓ iconset created (10 sizes)')
 
 run(`iconutil -c icns "${iconsetDir}" -o "${join(RESOURCES, 'icon.icns')}"`)
-copyFileSync(join(RESOURCES, 'icon.icns'), join(RESOURCES, 'icon-dev.icns'))
-console.log('  ✓ icon.icns, icon-dev.icns\n')
+console.log('  ✓ icon.icns')
+
+// Build icon-dev.icns from icon-dev.png (separate source, dark background)
+const devIconsetDir = join(TMP, 'icon-dev.iconset')
+ensureDir(devIconsetDir)
+const icnsDevSrc = join(TMP, 'icon-dev-full-bleed.png')
+
+for (const [name, size] of sizes) {
+  run(`sips -z ${size} ${size} "${icnsDevSrc}" --out "${join(devIconsetDir, name)}"`)
+}
+run(`iconutil -c icns "${devIconsetDir}" -o "${join(RESOURCES, 'icon-dev.icns')}"`)
+console.log('  ✓ icon-dev.icns\n')
 
 // Cleanup
 cleanDir(TMP)
 
 console.log('✅ Done! All icons generated from single source.\n')
 console.log('Files updated:')
-console.log('  resources/icon.icns        (macOS bundle — rounded rect with padding)')
-console.log('  resources/icon-dev.icns    (dev macOS bundle)')
-console.log('  resources/icon.png         (BrowserWindow / dev dock — with padding)')
-console.log('  resources/icon-dev.png     (dev BrowserWindow)')
+console.log('  resources/icon.icns        (macOS bundle — full-bleed, system applies mask)')
+console.log('  resources/icon-dev.icns    (dev macOS bundle, dark bg)')
+console.log('  resources/icon.png         (squircle-masked, white bg)')
+console.log('  resources/icon-dev.png     (squircle-masked, dark bg)')
 console.log('  resources/tray.png         (tray 22×22)')
 console.log('  resources/tray@2x.png      (tray 44×44 Retina)')
-console.log('  src/renderer/assets/app-icon.png (About dialog)')

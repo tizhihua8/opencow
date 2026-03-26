@@ -5,7 +5,7 @@ import { ExternalLink, X } from 'lucide-react'
 import { Dialog } from '@/components/ui/Dialog'
 import { useAppStore } from '@/stores/appStore'
 import { APP_NAME, APP_VERSION } from '@shared/appIdentity'
-import appIcon from '@/assets/app-icon.png'
+import appIcon from '@resources/icon.png'
 import { UpdateStatus } from './UpdateStatus'
 
 // ---------------------------------------------------------------------------
