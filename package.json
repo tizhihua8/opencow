@@ -170,20 +170,20 @@
       "iconSize": 128,
       "contents": [
         {
-          "x": 192,
-          "y": 244,
+          "x": 180,
+          "y": 170,
           "type": "file"
         },
         {
-          "x": 548,
-          "y": 244,
+          "x": 480,
+          "y": 170,
           "type": "link",
           "path": "/Applications"
         }
       ],
       "window": {
-        "width": 740,
-        "height": 480
+        "width": 660,
+        "height": 400
       }
     },
     "win": {

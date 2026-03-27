@@ -109,6 +109,13 @@ def process_icon(source_path, png_name, full_bleed_name):
     if src.size != (CANVAS, CANVAS):
         src = src.resize((CANVAS, CANVAS), Image.LANCZOS)
 
+    # Flatten alpha: composite onto opaque background to eliminate any
+    # semi-transparent pixels. Without this, macOS renders transparent
+    # areas as a visible gap between the icon content and the squircle.
+    bg_px = src.getpixel((0, 0))[:3] + (255,)  # sample corner for bg color
+    bg = Image.new("RGBA", (CANVAS, CANVAS), bg_px)
+    src = Image.alpha_composite(bg, src)
+
     # Save full-bleed for .icns generation
     src.save(os.path.join(tmp_dir, full_bleed_name))
 
