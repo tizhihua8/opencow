@@ -16,17 +16,22 @@
  *   - iconutil (built-in)
  *   - python3 + Pillow (`pip3 install Pillow`)
  *
+ * Source images (all pre-normalized to 1024×1024):
+ *   resources/logo-source.png     — production app icon (white bg, cow at ~64%)
+ *   resources/logo-source-dev.png — dev app icon (dark bg, cow at ~64%)
+ *   resources/tray-source.png     — tray/menu bar icon (transparent bg, cow at ~75%)
+ *
  * Generated outputs:
  *   resources/icon.icns        — macOS .app bundle icon (full-bleed, system applies squircle mask)
- *   resources/icon.png         — BrowserWindow / dev Dock icon (pre-masked squircle + padding)
- *   resources/icon-dev.icns    — dev build .icns (full-bleed, dark bg, from logo-source-dev.png)
- *   resources/icon-dev.png     — dev Dock icon (pre-masked squircle, dark bg)
+ *   resources/icon.png         — BrowserWindow / Dock icon (pre-rendered squircle mask)
+ *   resources/icon-dev.icns    — dev build .icns (full-bleed, dark bg)
+ *   resources/icon-dev.png     — dev Dock icon (pre-rendered squircle mask, dark bg)
  *   resources/tray.png         — menu bar tray icon 22×22 (colored, cropped)
  *   resources/tray@2x.png      — menu bar tray icon 44×44 (colored, cropped, Retina)
  *
- * NOTE: .icns files are full-bleed — macOS applies squircle mask automatically for
- * bundle icons. .png files have a pre-rendered squircle mask because Electron's
- * app.dock.setIcon() and BrowserWindow icon do NOT get system masking.
+ * Both prod and dev icons go through the SAME pipeline (process_icon).
+ * .icns = full-bleed source (system masks it). .png = pre-rendered squircle mask
+ * (Electron's app.dock.setIcon() and BrowserWindow do NOT get system masking).
  */
 
 import { execSync } from 'node:child_process'
@@ -74,100 +79,66 @@ ensureDir(TMP)
 const pyScript = join(TMP, 'gen.py')
 writeFileSync(pyScript, `
 import sys, os
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 
-src_path = sys.argv[1]
-tmp_dir  = sys.argv[2]
-res_dir  = sys.argv[3]
-
-src = Image.open(src_path).convert("RGBA")
-
-# ── Crop to content bounding box ──
-def get_bbox(img, threshold=30):
-    px = img.load()
-    w, h = img.size
-    x0, y0, x1, y1 = w, h, 0, 0
-    for y in range(h):
-        for x in range(w):
-            if px[x, y][3] > threshold:
-                x0, y0, x1, y1 = min(x0, x), min(y0, y), max(x1, x), max(y1, y)
-    return (x0, y0, x1 + 1, y1 + 1)
-
-bbox = get_bbox(src)
-sz = max(bbox[2] - bbox[0], bbox[3] - bbox[1])
-cx, cy = (bbox[0] + bbox[2]) // 2, (bbox[1] + bbox[3]) // 2
-half = sz // 2
-crop = src.crop((max(0, cx-half), max(0, cy-half),
-                 min(src.size[0], cx+half), min(src.size[1], cy+half)))
-if crop.size[0] != crop.size[1]:
-    s = max(crop.size)
-    c = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    c.paste(crop, ((s - crop.size[0]) // 2, (s - crop.size[1]) // 2))
-    crop = c
+src_path     = sys.argv[1]
+dev_src_path = sys.argv[2]
+tmp_dir      = sys.argv[3]
+res_dir      = sys.argv[4]
 
 CANVAS = 1024
 
-# ── macOS squircle mask (continuous-curvature rounded rect) ──
-# Apple's icon grid: 824×824 shape centered in 1024×1024 canvas (~100px margin).
-# The squircle radius is ~185px on the 824 shape.
-# We approximate the system squircle with a high-quality rounded rectangle.
+# ── macOS squircle mask ──
+# Apple icon grid: 824×824 squircle centered in 1024×1024 canvas.
 SHAPE = 824
 MARGIN = (CANVAS - SHAPE) // 2
 SHAPE_RADIUS = 185
 
-def make_squircle_mask():
-    """Create a macOS-style squircle alpha mask on a 1024×1024 canvas."""
-    mask = Image.new("L", (CANVAS, CANVAS), 0)
-    ImageDraw.Draw(mask).rounded_rectangle(
-        [MARGIN, MARGIN, MARGIN + SHAPE, MARGIN + SHAPE],
-        radius=SHAPE_RADIUS, fill=255)
-    return mask
+mask = Image.new("L", (CANVAS, CANVAS), 0)
+ImageDraw.Draw(mask).rounded_rectangle(
+    [MARGIN, MARGIN, MARGIN + SHAPE, MARGIN + SHAPE],
+    radius=SHAPE_RADIUS, fill=255)
 
-def make_full_bleed(content, bg_color):
-    """Create a full-bleed 1024×1024 icon (for .icns, system applies mask).
-    Apple icon grid: content sits within ~18% padding of the canvas,
-    so the main visual occupies ~64% of the total area — matching the
-    proportions of first-party macOS icons (Finder, Safari, etc.)."""
-    icon = Image.new("RGBA", (CANVAS, CANVAS), bg_color)
-    CONTENT_PAD = int(CANVAS * 0.18)
-    CONTENT_SIZE = CANVAS - CONTENT_PAD * 2
-    resized = content.resize((CONTENT_SIZE, CONTENT_SIZE), Image.LANCZOS)
-    icon.paste(resized, (CONTENT_PAD, CONTENT_PAD), resized)
-    return icon
+def process_icon(source_path, png_name, full_bleed_name):
+    """Identical pipeline for both prod and dev icons.
+    Source images are pre-normalized to 1024×1024 with cow at ~64%.
+    - .icns: use source as-is (full-bleed), system applies squircle mask
+    - .png:  pre-render squircle mask (for app.dock.setIcon / BrowserWindow)
+    """
+    src = Image.open(source_path).convert("RGBA")
+    if src.size != (CANVAS, CANVAS):
+        src = src.resize((CANVAS, CANVAS), Image.LANCZOS)
 
-def make_masked_png(full_bleed_icon):
-    """Apply squircle mask to a full-bleed icon (for .png used by app.dock.setIcon)."""
-    mask = make_squircle_mask()
-    result = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
-    result.paste(full_bleed_icon, (0, 0), mask)
-    return result
+    # Save full-bleed for .icns generation
+    src.save(os.path.join(tmp_dir, full_bleed_name))
 
-# 1. Production icon — white background
-full_bleed = make_full_bleed(crop, (255, 255, 255, 255))
-full_bleed.save(os.path.join(tmp_dir, "icon-full-bleed.png"))  # for .icns
-make_masked_png(full_bleed).save(os.path.join(res_dir, "icon.png"))
-print("  ✓ icon.png (squircle-masked, white bg, for dock/BrowserWindow)")
+    # Apply squircle mask for .png
+    masked = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
+    masked.paste(src, (0, 0), mask)
+    masked.save(os.path.join(res_dir, png_name))
 
-# 2. Dev icon — dark background, separate source
-dev_src_path = sys.argv[4] if len(sys.argv) > 4 else None
-if dev_src_path and os.path.exists(dev_src_path):
-    dev_src = Image.open(dev_src_path).convert("RGBA")
-    dev_full = dev_src.resize((CANVAS, CANVAS), Image.LANCZOS)
+# Both icons go through the exact same pipeline
+process_icon(src_path, "icon.png", "icon-full-bleed.png")
+print("  ✓ icon.png (squircle-masked, from logo-source.png)")
+
+if os.path.exists(dev_src_path):
+    process_icon(dev_src_path, "icon-dev.png", "icon-dev-full-bleed.png")
+    print("  ✓ icon-dev.png (squircle-masked, from logo-source-dev.png)")
 else:
-    dev_full = full_bleed
-    print("    (no dev source found, using production icon as fallback)")
-dev_full.save(os.path.join(tmp_dir, "icon-dev-full-bleed.png"))  # for .icns
-make_masked_png(dev_full).save(os.path.join(res_dir, "icon-dev.png"))
-print("  ✓ icon-dev.png (squircle-masked, dark bg, for dev dock)")
+    # Fallback: copy production icon
+    import shutil
+    shutil.copy2(os.path.join(res_dir, "icon.png"), os.path.join(res_dir, "icon-dev.png"))
+    shutil.copy2(os.path.join(tmp_dir, "icon-full-bleed.png"), os.path.join(tmp_dir, "icon-dev-full-bleed.png"))
+    print("  ✓ icon-dev.png (fallback: same as icon.png)")
 
-# 3. tray.png / tray@2x.png — Colored menu bar icon
-TRAY_PADDING_RATIO = 0.15
-tray_sz = int(sz * (1 + TRAY_PADDING_RATIO * 2))
-tray_canvas = Image.new("RGBA", (tray_sz, tray_sz), (0, 0, 0, 0))
-offset = int(tray_sz * TRAY_PADDING_RATIO)
-tray_canvas.paste(crop, (offset, offset), crop)
-tray_canvas.resize((44, 44), Image.LANCZOS).save(os.path.join(res_dir, "tray@2x.png"))
-tray_canvas.resize((22, 22), Image.LANCZOS).save(os.path.join(res_dir, "tray.png"))
+# Tray icons — from pre-cleaned tray-source.png (transparent bg, cow at 75%)
+tray_src_path = os.path.join(res_dir, "tray-source.png")
+if os.path.exists(tray_src_path):
+    tray_src = Image.open(tray_src_path).convert("RGBA")
+    tray_src.resize((44, 44), Image.LANCZOS).save(os.path.join(res_dir, "tray@2x.png"))
+    tray_src.resize((22, 22), Image.LANCZOS).save(os.path.join(res_dir, "tray.png"))
+else:
+    print("  ⚠ tray-source.png not found, skipping tray icons")
 print("  ✓ tray.png (22×22), tray@2x.png (44×44)")
 
 print("\\n✅ All icon variants generated")
@@ -175,7 +146,7 @@ print("\\n✅ All icon variants generated")
 
 try {
   const result = execSync(
-    `python3 "${pyScript}" "${SOURCE}" "${TMP}" "${RESOURCES}" "${SOURCE_DEV}"`,
+    `python3 "${pyScript}" "${SOURCE}" "${SOURCE_DEV}" "${TMP}" "${RESOURCES}"`,
     { encoding: 'utf-8' },
   )
   console.log(result)
