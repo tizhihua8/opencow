@@ -111,6 +111,14 @@ process.on('uncaughtException', (err) => {
   log.error('Uncaught exception in main process', err)
 })
 process.on('unhandledRejection', (reason) => {
+  // SDK emits transient "ProcessTransport is not ready for writing" rejections
+  // when hook callbacks race against child process shutdown. These are harmless
+  // and expected during lifecycle teardown — log as warn, not error.
+  const message = reason instanceof Error ? reason.message : String(reason)
+  if (message.includes('ProcessTransport is not ready for writing') || message.includes('Stream closed')) {
+    log.warn('SDK transport closed during shutdown (expected)', reason)
+    return
+  }
   log.error('Unhandled rejection in main process', reason)
 })
 

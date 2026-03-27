@@ -428,6 +428,12 @@ export function adaptClaudeSdkMessage(message: SDKMessage): EngineRuntimeEvent[]
     return []
   }
 
+  // Task progress updates (e.g. todo list tracking). Informational only;
+  // the conversation pipeline does not need to act on these.
+  if (type === 'system' && subtype === 'task_progress') {
+    return []
+  }
+
   // The SDK echoes `user` messages back on the stream; they carry no new
   // information for the engine so we silently drop them.
   if (type === 'user') {
