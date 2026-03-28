@@ -18,6 +18,7 @@
 
 import type {
   CodexAuthConfig,
+  HTTPAuthResult,
   ProviderAdapter,
   ProviderAdapterStatus,
   CustomCredential,
@@ -103,6 +104,16 @@ export class CustomProvider implements ProviderAdapter {
       apiKey: credential.apiKey,
       baseUrl: credential.baseUrl,
       authStyle: credential.authStyle,
+    }
+  }
+
+  async getHTTPAuth(): Promise<HTTPAuthResult | null> {
+    const credential = await this.store.get('custom')
+    if (!credential?.apiKey || !credential?.baseUrl) return null
+    return {
+      apiKey: credential.apiKey,
+      baseUrl: credential.baseUrl,
+      authStyle: credential.authStyle === 'bearer' ? 'bearer' : 'x-api-key',
     }
   }
 

@@ -25,9 +25,10 @@ import type {
   DataBusEvent,
 } from '@shared/types'
 import type { CodexAuthConfig, ProviderAdapter } from './types'
+import type { LLMAuthConfig } from '../../llm/types'
 import { CredentialStore } from './credentialStore'
 import { SubscriptionProvider } from './providers/subscription'
-import { ApiKeyProvider } from './providers/apiKey'
+import { AnthropicApiKeyProvider, OpenAIApiKeyProvider } from './providers/apiKey'
 import { OpenRouterProvider } from './providers/openRouter'
 import { CustomProvider } from './providers/custom'
 import { createLogger } from '../../platform/logger'
@@ -50,15 +51,17 @@ export class ProviderService {
   constructor(deps: ProviderServiceDeps) {
     this.deps = deps
     this.providersByEngine = new Map<AIEngineKind, Map<ApiProvider, ProviderAdapter>>([
-      ['claude', this.createProviders(deps.credentialStoreByEngine.claude)],
-      ['codex', this.createProviders(deps.credentialStoreByEngine.codex)],
+      ['claude', this.createProviders('claude', deps.credentialStoreByEngine.claude)],
+      ['codex', this.createProviders('codex', deps.credentialStoreByEngine.codex)],
     ])
   }
 
-  private createProviders(store: CredentialStore): Map<ApiProvider, ProviderAdapter> {
+  private createProviders(engineKind: AIEngineKind, store: CredentialStore): Map<ApiProvider, ProviderAdapter> {
     return new Map<ApiProvider, ProviderAdapter>([
       ['subscription', new SubscriptionProvider(store)],
-      ['api_key', new ApiKeyProvider(store)],
+      ['api_key', engineKind === 'codex'
+        ? new OpenAIApiKeyProvider(store)
+        : new AnthropicApiKeyProvider(store)],
       ['openrouter', new OpenRouterProvider(store)],
       ['custom', new CustomProvider(store)],
     ])
@@ -276,6 +279,67 @@ export class ProviderService {
     const provider = this.getEngineProviders(engineKind).get(mode)
     if (!provider?.getCredential) return null
     return provider.getCredential()
+  }
+
+  /**
+   * Resolve structured HTTP auth for direct LLM API calls.
+   *
+   * Combines adapter-level credentials with engine-level config
+   * (protocol, model) to produce a complete auth config suitable
+   * for constructing HTTP headers in direct fetch() calls.
+   *
+   * Resolution strategy per engine:
+   * - Claude: adapter.getHTTPAuth() — all adapters support Anthropic protocol
+   * - Codex:  adapter.getCodexAuthConfig() — only compatible adapters support OpenAI protocol
+   *
+   * @throws When no active provider, adapter not found, or credentials unavailable
+   */
+  async resolveHTTPAuth(engineKind: AIEngineKind): Promise<LLMAuthConfig> {
+    const engineSettings = this.getEngineProviderSettings(engineKind)
+    const mode = engineSettings.activeMode
+
+    if (!mode) {
+      throw new Error(`No active provider mode configured for engine "${engineKind}"`)
+    }
+
+    const provider = this.getEngineProviders(engineKind).get(mode)
+    if (!provider) {
+      throw new Error(`No adapter found for provider mode "${mode}"`)
+    }
+
+    // Codex engine: use getCodexAuthConfig() which already encodes
+    // "is this adapter compatible with OpenAI protocol?" semantics.
+    // Not all adapters support OpenAI — ApiKeyProvider (sk-ant-*) and
+    // SubscriptionProvider (OAuth) return null.
+    if (engineKind === 'codex') {
+      const codexAuth = provider.getCodexAuthConfig
+        ? await provider.getCodexAuthConfig()
+        : null
+      if (!codexAuth?.apiKey) {
+        throw new Error(`Provider mode "${mode}" is not compatible with Codex/OpenAI protocol`)
+      }
+      return {
+        protocol: 'openai',
+        apiKey: codexAuth.apiKey,
+        baseUrl: codexAuth.baseUrl ?? 'https://api.openai.com',
+        authStyle: 'bearer',
+        model: engineSettings.defaultModel ?? 'gpt-4o-mini',
+      }
+    }
+
+    // Claude engine: use getHTTPAuth() for structured Anthropic-protocol auth
+    const httpAuth = await provider.getHTTPAuth()
+    if (!httpAuth) {
+      throw new Error(`Provider mode "${mode}" returned no HTTP auth credentials`)
+    }
+
+    return {
+      protocol: 'anthropic',
+      apiKey: httpAuth.apiKey,
+      baseUrl: httpAuth.baseUrl,
+      authStyle: httpAuth.authStyle,
+      model: engineSettings.defaultModel ?? 'claude-sonnet-4-20250514',
+    }
   }
 
   // ── Private ─────────────────────────────────────────────────────────

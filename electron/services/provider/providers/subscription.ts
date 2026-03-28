@@ -19,7 +19,7 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'http'
 import { createHash, randomBytes } from 'crypto'
 import { net, shell } from 'electron'
-import type { ProviderAdapter, ProviderAdapterStatus, OAuthCredential } from '../types'
+import type { HTTPAuthResult, ProviderAdapter, ProviderAdapterStatus, OAuthCredential } from '../types'
 import { OAUTH_CONFIG } from '../types'
 import { CredentialStore } from '../credentialStore'
 import { createLogger } from '../../../platform/logger'
@@ -65,27 +65,22 @@ export class SubscriptionProvider implements ProviderAdapter {
   }
 
   async getEnv(): Promise<Record<string, string>> {
-    const credential = await this.store.get('subscription')
-    if (!credential?.accessToken) {
+    const token = await this.resolveAccessToken()
+    if (!token) {
       log.warn('getEnv: no subscription credential or missing accessToken')
       return {}
     }
+    return { CLAUDE_CODE_OAUTH_TOKEN: token }
+  }
 
-    // Proactive refresh if token is about to expire
-    if (this.isTokenExpired(credential)) {
-      try {
-        await this.refreshToken(credential)
-        const refreshed = await this.store.get('subscription')
-        if (refreshed?.accessToken) {
-          return { CLAUDE_CODE_OAUTH_TOKEN: refreshed.accessToken }
-        }
-        log.warn('getEnv: token refresh completed but accessToken still missing')
-      } catch (err) {
-        log.warn('getEnv: proactive token refresh failed — using existing (possibly expired) token', err)
-      }
+  async getHTTPAuth(): Promise<HTTPAuthResult | null> {
+    const token = await this.resolveAccessToken()
+    if (!token) return null
+    return {
+      apiKey: token,
+      baseUrl: 'https://api.anthropic.com',
+      authStyle: 'bearer',
     }
-
-    return { CLAUDE_CODE_OAUTH_TOKEN: credential.accessToken }
   }
 
   async authenticate(): Promise<ProviderAdapterStatus> {
@@ -138,6 +133,36 @@ export class SubscriptionProvider implements ProviderAdapter {
   async logout(): Promise<void> {
     await this.store.remove('subscription')
     log.info('Subscription credentials cleared')
+  }
+
+  // ── Private: Token Resolution ──────────────────────────────────────
+
+  /**
+   * Resolve a valid access token, performing proactive refresh if needed.
+   *
+   * Shared by `getEnv()` (SDK subprocess env vars) and `getHTTPAuth()`
+   * (direct HTTP calls) to ensure consistent token refresh behavior.
+   *
+   * Note: `checkStatus()` has its own refresh logic with stricter error
+   * semantics (returns unauthenticated on refresh failure), so it does
+   * NOT share this method.
+   */
+  private async resolveAccessToken(): Promise<string | null> {
+    const credential = await this.store.get('subscription')
+    if (!credential?.accessToken) return null
+
+    if (this.isTokenExpired(credential)) {
+      try {
+        await this.refreshToken(credential)
+        const refreshed = await this.store.get('subscription')
+        if (refreshed?.accessToken) return refreshed.accessToken
+        log.warn('Token refresh completed but accessToken still missing')
+      } catch (err) {
+        log.warn('Proactive token refresh failed — using existing (possibly expired) token', err)
+      }
+    }
+
+    return credential.accessToken
   }
 
   // ── Private: OAuth PKCE Flow ────────────────────────────────────────

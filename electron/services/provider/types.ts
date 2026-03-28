@@ -62,6 +62,18 @@ export interface StoredCredentials {
   [key: string]: unknown
 }
 
+// ── HTTP Auth Result ────────────────────────────────────────────────
+
+/** Structured HTTP auth credentials for direct API calls (non-subprocess). */
+export interface HTTPAuthResult {
+  /** API key or OAuth access token */
+  apiKey: string
+  /** Fully-resolved base URL (no trailing slash, e.g. "https://api.anthropic.com") */
+  baseUrl: string
+  /** How the credential is sent in HTTP headers */
+  authStyle: 'x-api-key' | 'bearer'
+}
+
 // ── Provider Adapter Interface ──────────────────────────────────────
 
 export interface ProviderAdapterStatus {
@@ -126,6 +138,17 @@ export interface ProviderAdapter {
    * Return null for unsupported provider modes (e.g. Claude subscription / Anthropic API key).
    */
   getCodexAuthConfig?(): Promise<CodexAuthConfig | null>
+
+  /**
+   * Return structured HTTP auth credentials for direct API calls.
+   *
+   * Unlike `getEnv()` (env vars for SDK subprocess) or `getCodexAuthConfig()`
+   * (Codex SDK init), this method returns structured auth suitable for
+   * constructing HTTP headers in direct fetch() calls.
+   *
+   * Returns null if no valid credentials are stored.
+   */
+  getHTTPAuth(): Promise<HTTPAuthResult | null>
 
   /** Remove all stored credentials for this provider. */
   logout(): Promise<void>

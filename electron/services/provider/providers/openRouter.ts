@@ -21,6 +21,7 @@
 
 import type {
   CodexAuthConfig,
+  HTTPAuthResult,
   ProviderAdapter,
   ProviderAdapterStatus,
   OpenRouterCredential,
@@ -85,6 +86,16 @@ export class OpenRouterProvider implements ProviderAdapter {
     const credential = await this.store.get('openrouter')
     if (!credential?.apiKey) return null
     return { apiKey: credential.apiKey, baseUrl: credential.baseUrl }
+  }
+
+  async getHTTPAuth(): Promise<HTTPAuthResult | null> {
+    const credential = await this.store.get('openrouter')
+    if (!credential?.apiKey) return null
+    return {
+      apiKey: credential.apiKey,
+      baseUrl: credential.baseUrl?.trim() || OPENROUTER_BASE_URL,
+      authStyle: 'bearer',
+    }
   }
 
   async getCodexAuthConfig(): Promise<CodexAuthConfig | null> {
