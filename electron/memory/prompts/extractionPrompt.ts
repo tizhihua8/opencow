@@ -6,18 +6,31 @@ import type { MemoryItem } from '@shared/types'
  * Build the extraction prompt for the LLM.
  *
  * The prompt instructs the model to extract structured memories
- * from an interaction, merging with existing memories when appropriate.
+ * from an interaction, classify scope (user vs project) based on
+ * content semantics, and merge with existing memories when appropriate.
  */
-export function buildExtractionPrompt(params: {
+
+export interface ExtractionPromptParams {
   content: string
-  scope: 'user' | 'project'
-  projectName?: string
+  projectName: string | null
   sourceType: string
-  existingMemories: MemoryItem[]
-}): string {
-  const existingSummary =
-    params.existingMemories.length > 0
-      ? params.existingMemories
+  existingMemories: {
+    user: MemoryItem[]
+    project: MemoryItem[]
+  }
+}
+
+export function buildExtractionPrompt(params: ExtractionPromptParams): string {
+  const userMemorySummary =
+    params.existingMemories.user.length > 0
+      ? params.existingMemories.user
+          .map((m) => `- [${m.id}] (${m.category}) ${m.content}`)
+          .join('\n')
+      : '(none)'
+
+  const projectMemorySummary =
+    params.existingMemories.project.length > 0
+      ? params.existingMemories.project
           .map((m) => `- [${m.id}] (${m.category}) ${m.content}`)
           .join('\n')
       : '(none)'
@@ -27,11 +40,12 @@ You are a Memory Analyst for OpenCow, an AI-powered project management tool.
 Extract valuable, reusable memories from user interactions.
 
 ## Context
-- Scope: ${params.scope}-level
-${params.projectName ? `- Project: ${params.projectName}` : ''}
 - Source: ${params.sourceType}
-- Existing memories:
-${existingSummary}
+${params.projectName ? `- Current project: ${params.projectName}` : '- No project context'}
+- Existing user-level memories:
+${userMemorySummary}
+- Existing project-level memories:
+${projectMemorySummary}
 
 ## Interaction Content
 ${params.content}
@@ -47,12 +61,22 @@ For each memory:
    - 0.7-0.8: Strong behavioral pattern (e.g., always uses Chinese)
    - 0.5-0.6: Single-time inference (e.g., mentioned liking a tool once)
 4. Skip if nothing valuable — return empty array rather than low-quality memories
-5. **Merge with existing**: If an existing memory covers the SAME topic but with less detail:
+5. **Merge with existing**: If an existing memory (in either scope) covers the SAME topic but with less detail:
    - Set action="update" and targetId to the existing memory's [id]
    - Put the MERGED content (combining old + new information) in "content"
    - The merged content should be richer and more complete than either alone
 6. If an existing memory already fully covers this information, skip it entirely
 7. Only use action="new" when the information is genuinely not covered by any existing memory
+
+## Scope Classification
+Each memory must be assigned a scope based on its CONTENT, not where the conversation happened:
+- **"user"**: Personal traits that apply across ALL projects — identity, role, skills, aesthetic preferences, communication style, general workflow habits
+  Examples: "10 years Go experience", "prefers minimalist design", "is a backend developer", "likes direct communication"
+- **"project"**: Context specific to the current project — architecture decisions, tech stack choices, coding conventions, project goals, team agreements
+  Examples: "project uses monorepo structure", "API uses REST not GraphQL", "deploy target is AWS EKS"
+
+Rule of thumb: If the memory would still be true/useful in a DIFFERENT project, it's "user" scope.
+${!params.projectName ? 'Note: No project context — all memories should be "user" scope.' : ''}
 
 ## Output Format (JSON only, no markdown fences)
 {
@@ -62,7 +86,7 @@ For each memory:
       "targetId": null,
       "content": "concise natural language description",
       "category": "preference|background|behavior|workflow|fact|opinion|domain_knowledge|decision|project_context|requirement|convention|lesson_learned",
-      "scope": "${params.scope}",
+      "scope": "user",
       "confidence": 0.5,
       "tags": ["tag1", "tag2"],
       "reasoning": "why this is worth remembering"

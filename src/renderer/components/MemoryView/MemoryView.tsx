@@ -162,6 +162,7 @@ export function MemoryView(): React.JSX.Element {
             onChange={setCategoryFilter}
             showAll
             position="below"
+            align="right"
           />
 
           {/* New Memory */}

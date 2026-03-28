@@ -165,25 +165,26 @@ export class MemoryQualityGate {
     // 2. FTS keyword similarity check — with auto-merge safety net
     try {
       const keywords = candidate.content.split(/\s+/).slice(0, 5).join(' ')
+      // Search across ALL scopes — cross-scope dedup prevents user-level knowledge
+      // from being duplicated as project-level (and vice versa)
       const similar = await this.store.search({
         query: keywords,
-        scope: candidate.scope,
         status: 'confirmed',
-        limit: 3,
+        limit: 5,
       })
 
       for (const existing of similar) {
         const similarity = this.jaccard(candidate.content, existing.content)
 
         if (similarity >= JACCARD_DUPLICATE_THRESHOLD) {
-          // High similarity: merge if candidate is richer, reject otherwise
-          if (this.isRicherThan(candidate, existing) && !mergeTargetIds.has(existing.id)) {
+          // High similarity: merge if candidate is richer AND scope is compatible
+          if (this.isRicherThan(candidate, existing) && this.isScopeCompatibleForMerge(candidate, existing) && !mergeTargetIds.has(existing.id)) {
             return { outcome: 'merge', target: existing }
           }
           return { outcome: 'reject', reason: 'too_similar' }
         }
 
-        if (similarity >= JACCARD_MERGE_THRESHOLD && this.isRicherThan(candidate, existing) && !mergeTargetIds.has(existing.id)) {
+        if (similarity >= JACCARD_MERGE_THRESHOLD && this.isRicherThan(candidate, existing) && this.isScopeCompatibleForMerge(candidate, existing) && !mergeTargetIds.has(existing.id)) {
           return { outcome: 'merge', target: existing }
         }
       }
@@ -222,6 +223,22 @@ export class MemoryQualityGate {
   /** Whether the candidate carries more information than the existing memory. */
   private isRicherThan(candidate: CandidateMemory, existing: MemoryItem): boolean {
     return candidate.content.length > existing.content.length || candidate.confidence > existing.confidence
+  }
+
+  /**
+   * Whether merging the candidate into the existing memory is scope-compatible.
+   *
+   * Prevents scope degradation: a project-scoped candidate should NOT be merged
+   * into a user-level target (the user-level memory is already more general).
+   *
+   * When candidate is user-level and target is project-level, we allow the merge
+   * to enrich the project memory's content. A future enhancement could also
+   * update the target's scope to "user" for true scope promotion.
+   */
+  private isScopeCompatibleForMerge(candidate: CandidateMemory, existing: MemoryItem): boolean {
+    if (candidate.scope === existing.scope) return true
+    if (candidate.scope === 'project' && existing.scope === 'user') return false
+    return true
   }
 
   /**

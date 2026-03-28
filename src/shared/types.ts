@@ -4085,7 +4085,7 @@ export const MEMORY_DEFAULTS: MemorySettings = {
   enabled: true,
   autoConfirm: false,
   confirmTimeoutSeconds: 10,
-  extractionDelaySeconds: 15,
+  extractionDelaySeconds: 10,
   extractionSources: ['session', 'issue', 'issue_session', 'review_session'],
   maxMemories: 100,
   autoArchiveDays: 90,

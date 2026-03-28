@@ -12,7 +12,7 @@ import { existsSync } from 'node:fs'
 import type { Query, SDKMessage, Options as SdkOptions } from '@anthropic-ai/claude-agent-sdk'
 import { MessageQueue } from '../command/messageQueue'
 import { createLogger } from '../platform/logger'
-import { buildExtractionPrompt } from './prompts/extractionPrompt'
+import { buildExtractionPrompt, type ExtractionPromptParams } from './prompts/extractionPrompt'
 import type { InteractionEvent, CandidateMemory, CandidateAction } from './types'
 import type { MemoryItem, MemoryScope } from '@shared/types'
 import { MEMORY_LIMITS } from '@shared/types'
@@ -79,7 +79,7 @@ export class MemoryExtractor {
    */
   async extract(
     event: InteractionEvent,
-    existingMemories: MemoryItem[],
+    existingMemories: { user: MemoryItem[]; project: MemoryItem[] },
   ): Promise<CandidateMemory[]> {
     // Pre-filter
     const filtered = preFilter(event.content)
@@ -88,18 +88,23 @@ export class MemoryExtractor {
       return []
     }
 
-    const scope: MemoryScope = event.projectId ? 'project' : 'user'
-    const prompt = buildExtractionPrompt({
+    const promptParams: ExtractionPromptParams = {
       content: filtered,
-      scope,
-      projectName: event.metadata.projectName,
+      projectName: event.metadata.projectName ?? null,
       sourceType: event.type,
-      existingMemories: existingMemories.slice(0, MAX_EXISTING_MEMORIES_IN_PROMPT),
-    })
+      existingMemories: {
+        user: existingMemories.user.slice(0, MAX_EXISTING_MEMORIES_IN_PROMPT),
+        project: existingMemories.project.slice(0, MAX_EXISTING_MEMORIES_IN_PROMPT),
+      },
+    }
+    const prompt = buildExtractionPrompt(promptParams)
+
+    // Fallback scope when LLM omits the scope field
+    const defaultScope: MemoryScope = event.projectId ? 'project' : 'user'
 
     try {
       const responseText = await this.runQuery(prompt)
-      return this.parseResponse(responseText, scope)
+      return this.parseResponse(responseText, defaultScope)
     } catch (err) {
       log.error('Extraction failed', err)
       return []

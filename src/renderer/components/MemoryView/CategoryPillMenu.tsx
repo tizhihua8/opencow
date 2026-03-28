@@ -20,6 +20,8 @@ interface CategoryPillMenuProps {
   showAll?: boolean
   /** PillDropdown position. Default: 'above'. */
   position?: 'above' | 'below'
+  /** PillDropdown horizontal alignment. Default: 'left'. */
+  align?: 'left' | 'right'
 }
 
 export function CategoryPillMenu({
@@ -27,6 +29,7 @@ export function CategoryPillMenu({
   onChange,
   showAll = false,
   position = 'above',
+  align,
 }: CategoryPillMenuProps): React.JSX.Element {
   const { t } = useTranslation('memory')
   const [open, setOpen] = useState(false)
@@ -38,6 +41,7 @@ export function CategoryPillMenu({
       open={open}
       onOpenChange={setOpen}
       position={position}
+      align={align}
       trigger={
         <button
           onClick={() => setOpen((prev) => !prev)}

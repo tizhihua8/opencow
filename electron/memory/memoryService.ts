@@ -209,22 +209,35 @@ export class MemoryService {
         return
       }
 
-      // 1. Fetch existing memories FIRST — so LLM can see them for merge decisions
-      const existing = await this.store.list({
-        scope: event.projectId ? 'project' : 'user',
-        projectId: event.projectId ?? undefined,
-        status: 'confirmed',
-        limit: 100,
-        sortBy: 'created_at',
-        sortOrder: 'desc',
-      })
+      // 1. Fetch existing memories from BOTH scopes — LLM needs cross-scope visibility
+      //    for scope classification, dedup, and merge decisions
+      const [userMemories, projectMemories] = await Promise.all([
+        this.store.list({
+          scope: 'user',
+          status: 'confirmed',
+          limit: 50,
+          sortBy: 'created_at',
+          sortOrder: 'desc',
+        }),
+        event.projectId
+          ? this.store.list({
+              scope: 'project',
+              projectId: event.projectId,
+              status: 'confirmed',
+              limit: 50,
+              sortBy: 'created_at',
+              sortOrder: 'desc',
+            })
+          : Promise.resolve([]),
+      ])
+      const allExisting = [...userMemories, ...projectMemories]
 
-      // 2. LLM extraction — pass existing memories for merge awareness
-      const candidates = await this.extractor.extract(event, existing)
+      // 2. LLM extraction — pass both scopes for merge awareness and scope classification
+      const candidates = await this.extractor.extract(event, { user: userMemories, project: projectMemories })
       if (candidates.length === 0) return
 
       // 3. Quality gate — routes to new or merge paths
-      const { newCandidates, mergeCandidates } = await this.qualityGate.evaluate(candidates, existing)
+      const { newCandidates, mergeCandidates } = await this.qualityGate.evaluate(candidates, allExisting)
       if (newCandidates.length === 0 && mergeCandidates.length === 0) return
 
       // 4a. Handle new memories
