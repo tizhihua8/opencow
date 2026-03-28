@@ -17,8 +17,8 @@ Thank you for your interest in contributing to OpenCow! This guide will help you
 1. **Fork and clone** the repository:
 
    ```bash
-   git clone https://github.com/<your-username>/OpenCow.git
-   cd OpenCow
+   git clone https://github.com/<your-username>/opencow.git
+   cd opencow
    ```
 
 2. **Install dependencies** using [pnpm](https://pnpm.io/):

@@ -22,7 +22,7 @@
 
 [工作原理](#工作原理) · [功能特性](#功能特性) · [快速开始](#快速开始) · [架构](#架构) · [参与贡献](#参与贡献)
 
-**[官方网站](https://opencow.ai)** · **[下载](https://opencow.ai/download)**
+**[官方网站](https://opencow.ai)** · **[X (Twitter)](https://x.com/OpenCow_AI)** · **[下载](https://opencow.ai/download)**
 
 </div>
 
@@ -323,7 +323,7 @@ git checkout -b feat/my-feature
 
 ## 社区
 
-- [X (Twitter)](https://x.com/OpenCowAI) — 关注我们获取最新动态
+- [X (Twitter)](https://x.com/OpenCow_AI) — 关注我们获取最新动态
 - [Discord](https://discord.gg/dDsjwb5pzN) — 加入社区交流
 - [GitHub Issues](https://github.com/OpenCowAI/opencow/issues) — Bug 报告与功能请求
 - [GitHub Discussions](https://github.com/OpenCowAI/opencow/discussions) — 问题与想法

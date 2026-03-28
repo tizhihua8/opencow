@@ -22,7 +22,7 @@ ship in parallel. For every team.
 
 [How It Works](#how-it-works) · [Features](#the-platform) · [Quick Start](#quick-start) · [Architecture](#architecture) · [Contributing](#contributing)
 
-**[Website](https://opencow.ai)** · **[Download](https://opencow.ai/download)**
+**[Website](https://opencow.ai)** · **[X (Twitter)](https://x.com/OpenCow_AI)** · **[Download](https://opencow.ai/download)**
 
 </div>
 
@@ -323,7 +323,7 @@ Please read **[CONTRIBUTING.md](CONTRIBUTING.md)** for the full guide on code st
 
 ## Community
 
-- [X (Twitter)](https://x.com/OpenCowAI) — Follow us for updates
+- [X (Twitter)](https://x.com/OpenCow_AI) — Follow us for updates
 - [Discord](https://discord.gg/dDsjwb5pzN) — Chat with the community
 - [GitHub Issues](https://github.com/OpenCowAI/opencow/issues) — Bug reports & feature requests
 - [GitHub Discussions](https://github.com/OpenCowAI/opencow/discussions) — Questions & ideas
