@@ -62,6 +62,8 @@ export class CapabilityCacheManager {
   private watchers = new Map<string, FSWatcher>()
   private debouncedHandles: Debounced[] = []
   private listeners = new Set<() => void>()
+  /** Reentrancy guard — prevents infinite invalidate → dispatch → invalidate loops. */
+  private invalidating = false
 
   /** Get cached snapshot by project key (or '__global__' for global) */
   get(cacheKey: string): CapabilitySnapshot | null {
@@ -75,13 +77,22 @@ export class CapabilityCacheManager {
 
   /** Invalidate all cached snapshots and notify listeners */
   invalidate(): void {
-    this.snapshots.clear()
-    for (const fn of this.listeners) {
-      try {
-        fn()
-      } catch (err) {
-        log.warn('Invalidation listener threw', err)
+    // Reentrancy guard: listeners may dispatch DataBus events that trigger
+    // another invalidate() call (capabilities:changed → cache.invalidate() →
+    // onInvalidate → dispatch capabilities:changed → ...). Break the cycle.
+    if (this.invalidating) return
+    this.invalidating = true
+    try {
+      this.snapshots.clear()
+      for (const fn of this.listeners) {
+        try {
+          fn()
+        } catch (err) {
+          log.warn('Invalidation listener threw', err)
+        }
       }
+    } finally {
+      this.invalidating = false
     }
   }
 
