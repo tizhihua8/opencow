@@ -27,6 +27,7 @@ import { SKILL_BUNDLE_FILENAME, type CapabilityStore } from './capabilityStore'
 import type { StateRepository } from './stateRepository'
 import type { DiagnosticsCollector } from './diagnostics'
 import { safeDirEntries, safeReadFile, safeReadJson } from './shared/fsUtils'
+import { normalizeForStorage } from './shared/mcpServerConfig'
 import { BUILT_IN_TEMPLATES } from './builtInTemplates'
 import { resolvePlugins, resolveCapabilityDirs } from '../capabilities/pluginResolver'
 import { resolveClaudeCodePaths } from '../capabilities/paths'
@@ -565,16 +566,10 @@ export class ImportPipeline {
 
     // After isPlainObject guard, serverConfig is already Record<string, unknown>
 
-    // Save in canonical format: { name, serverConfig: { type, command, args?, env? } }
+    // Save in canonical format: { name, serverConfig: { type, ... } }
     // This matches what serializeMcpServer() and distributionPipeline.publishMcpServer() expect.
-    const serverCfg: Record<string, unknown> = {
-      type: serverConfig['type'] ?? 'stdio',
-      command: serverConfig['command'] ?? '',
-    }
-    const args = Array.isArray(serverConfig['args']) ? serverConfig['args'] : []
-    if (args.length > 0) serverCfg['args'] = args
-    const env = isPlainObject(serverConfig['env']) ? serverConfig['env'] : {}
-    if (Object.keys(env as Record<string, unknown>).length > 0) serverCfg['env'] = env
+    // normalizeForStorage preserves all transport-type-specific fields (url, headers, etc.).
+    const serverCfg = normalizeForStorage(serverConfig as Record<string, unknown>)
 
     const normalized: Record<string, unknown> = {
       name: item.name,
@@ -650,16 +645,8 @@ export class ImportPipeline {
     if (isPlainObject(config['serverConfig'])) {
       return { ...config, name }
     }
-    // Legacy flat format: { type, command, args?, env? }
-    const serverCfg: Record<string, unknown> = {
-      type: config['type'] ?? 'stdio',
-      command: config['command'] ?? '',
-    }
-    const args = Array.isArray(config['args']) ? config['args'] : []
-    if (args.length > 0) serverCfg['args'] = args
-    const env = isPlainObject(config['env']) ? config['env'] : {}
-    if (Object.keys(env).length > 0) serverCfg['env'] = env
-    return { name, serverConfig: serverCfg }
+    // Legacy/flat format — normalizeForStorage preserves all transport-type fields
+    return { name, serverConfig: normalizeForStorage(config) }
   }
 
   // ── Provenance recording ──────────────────────────────────────

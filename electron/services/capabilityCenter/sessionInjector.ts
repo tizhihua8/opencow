@@ -15,8 +15,8 @@ import type {
   AIEngineKind,
   StartSessionNativeToolAllowItem,
 } from '@shared/types'
-import { isPlainObject } from '@shared/typeGuards'
 import type { StateRepository } from './stateRepository'
+import { extractSdkConfig, validateMcpConfig } from './shared/mcpServerConfig'
 import type { DeclarativeHookGroup } from './hookCallbackAdapter'
 import { createLogger } from '../../platform/logger'
 import { resolveDistributionTargetType } from './distributionTargets'
@@ -41,12 +41,14 @@ const DEFAULT_MAX_SKILL_CHARS_BY_ENGINE: Readonly<Record<AIEngineKind, number>> 
   codex: 24_000,
 }
 
-export interface McpServerConfig {
-  command?: string
-  args?: string[]
-  env?: Record<string, string>
-  [key: string]: string | string[] | Record<string, string> | undefined
-}
+/**
+ * SDK-ready MCP server config — opaque record passed directly to the SDK.
+ *
+ * We intentionally do NOT define named fields here. The actual shape is
+ * validated by `validateMcpConfig()` from the shared mcpServerConfig module,
+ * and the SDK's own Zod schema strips unrecognized keys at runtime.
+ */
+export type McpServerConfig = Record<string, unknown>
 
 export interface PlanSummarySkillDecision {
   skillName: string
@@ -211,12 +213,21 @@ export async function buildCapabilityPlan(params: {
 
   const mcpServers: Record<string, McpServerConfig> = {}
   for (const mcp of enabledMcpServers) {
-    const raw = mcp.config?.['serverConfig'] ?? mcp.config
-    if (isPlainObject(raw)) {
-      mcpServers[mcp.name] = raw as McpServerConfig
-    } else {
-      log.warn(`MCP server "${mcp.name}" skipped: config.serverConfig is not a plain object`, { config: mcp.config })
+    const sdkConfig = extractSdkConfig(mcp.config)
+    if (!sdkConfig) {
+      log.warn(`MCP server "${mcp.name}" skipped: unable to extract serverConfig`, { config: mcp.config })
+      continue
     }
+
+    // Validate before passing to SDK — invalid configs would cause a fatal
+    // exit code 1 from the SDK's Zod schema validation.
+    const validation = validateMcpConfig(sdkConfig)
+    if (!validation.valid) {
+      log.warn(`MCP server "${mcp.name}" skipped: ${validation.reason}`, { config: sdkConfig })
+      continue
+    }
+
+    mcpServers[mcp.name] = sdkConfig
   }
 
   const selectedSkillNameSet = new Set(selectedSkillSegments.map((segment) => segment.skillName))
