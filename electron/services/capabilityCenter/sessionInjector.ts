@@ -17,6 +17,7 @@ import type {
 } from '@shared/types'
 import type { StateRepository } from './stateRepository'
 import { extractSdkConfig, validateMcpConfig } from './shared/mcpServerConfig'
+import { isPlainObject } from '@shared/typeGuards'
 import type { DeclarativeHookGroup } from './hookCallbackAdapter'
 import { createLogger } from '../../platform/logger'
 import { resolveDistributionTargetType } from './distributionTargets'
