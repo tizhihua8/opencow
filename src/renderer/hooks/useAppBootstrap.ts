@@ -53,41 +53,57 @@ const FILE_MODIFYING_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit'])
 //
 // Messages and metadata are flushed on SEPARATE cadences:
 //
-//   Messages → rAF (~60fps): streaming text must appear without delay.
+//   Messages → 33ms (~30fps): streaming text appears smoothly while
+//     keeping the main thread free for input handling and scrolling.
+//     Using a fixed 33ms interval (instead of rAF) decouples flush rate
+//     from display refresh — on 120Hz displays rAF would double the
+//     Zustand set() frequency for zero visual benefit.
 //     After Fix 20, only ONE self-subscribing AssistantMessage re-renders
-//     per rAF frame (~0.5ms), not the full Virtuoso cascade.
+//     per flush (~0.5ms), not the full Virtuoso cascade.
 //
 //   Metadata → 500ms (~2fps): token counts, duration, and activity text
-//     don't need 60fps.  Flushing at 500ms eliminates ~0.8ms/frame of
+//     don't need 30fps.  Flushing at 500ms eliminates ~0.8ms/frame of
 //     React work from StreamingOverlayContent and SessionStatusBar that
-//     would otherwise fire on every rAF frame.
+//     would otherwise fire on every message flush.
 //
 // Terminal events (session:idle, session:stopped, session:deleted) flush
 // BOTH buffers immediately via _flushAll().
 
 /** Latest metadata snapshot per session — last-write-wins deduplication. */
 const _pendingMeta = new Map<string, SessionSnapshot>()
-/** Accumulated messages per session within the current frame. */
+/** Accumulated messages per session within the current flush window. */
 const _pendingMsgs = new Map<string, ManagedSessionMessage[]>()
-/** rAF handle for message flush — 0 means no flush is scheduled. */
-let _msgRafId = 0
+/** Timer handle for message flush — 0 means no flush is scheduled. */
+let _msgTimerId = 0
 /** Timer handle for metadata flush — 0 means no flush is scheduled. */
 let _metaTimerId = 0
 
 /**
+ * Message flush interval (ms).
+ *
+ * 33 ms ≈ 30fps — perceptually smooth for streaming text while freeing
+ * the main thread for input handling and scrolling.  Decoupled from
+ * display refresh rate (rAF): on 120Hz displays rAF would double the
+ * Zustand set() frequency for zero visual benefit.
+ *
+ * Combined with the main-process DispatchThrottle (50ms ≈ 20fps), the
+ * effective visual update cadence is ~20-30fps.
+ */
+const MSG_FLUSH_INTERVAL_MS = 33
+
+/**
  * Metadata flush interval (ms).
  *
- * Token counts, duration, and activity text don't need 60fps updates —
- * the user can't perceive 16ms granularity in "1.2k tokens" or "12s".
+ * Token counts, duration, and activity text don't need 30fps updates —
+ * the user can't perceive 33ms granularity in "1.2k tokens" or "12s".
  * Flushing at 500ms (~2fps) eliminates ~0.8ms/frame of React work from
- * StreamingOverlayContent and SessionStatusBar re-renders on the other
- * 29 out of 30 frames.
+ * StreamingOverlayContent and SessionStatusBar re-renders.
  */
 const META_FLUSH_INTERVAL_MS = 500
 
 function _scheduleMsgFlush(): void {
-  if (_msgRafId !== 0) return
-  _msgRafId = requestAnimationFrame(_flushPendingMessages)
+  if (_msgTimerId !== 0) return
+  _msgTimerId = window.setTimeout(_flushPendingMessages, MSG_FLUSH_INTERVAL_MS)
 }
 
 function _scheduleMetaFlush(): void {
@@ -96,9 +112,9 @@ function _scheduleMetaFlush(): void {
 }
 
 function _flushPendingMessages(): void {
-  if (_msgRafId !== 0) {
-    cancelAnimationFrame(_msgRafId)
-    _msgRafId = 0
+  if (_msgTimerId !== 0) {
+    clearTimeout(_msgTimerId)
+    _msgTimerId = 0
   }
 
   const msgs = _pendingMsgs.size > 0 ? new Map(_pendingMsgs) : null
@@ -106,7 +122,7 @@ function _flushPendingMessages(): void {
   if (!msgs) return
 
   // Single set() for all message updates — the ONLY Zustand mutation per
-  // rAF frame during text-only streaming.  After Fix 20, only the single
+  // flush during text-only streaming.  After Fix 20, only the single
   // self-subscribing AssistantMessage re-renders from this.
   useCommandStore.getState().batchAppendSessionMessages(msgs)
 }
@@ -137,9 +153,9 @@ function _flushAll(): void {
 
 /** Cancel any pending flushes and discard buffered events. */
 function _cancelPendingFlush(): void {
-  if (_msgRafId !== 0) {
-    cancelAnimationFrame(_msgRafId)
-    _msgRafId = 0
+  if (_msgTimerId !== 0) {
+    clearTimeout(_msgTimerId)
+    _msgTimerId = 0
   }
   if (_metaTimerId !== 0) {
     clearTimeout(_metaTimerId)

@@ -676,6 +676,14 @@ export function IssueDetailView({ issueId, onClose, onNavigateToIssue }: IssueDe
     [archivedSessions, handleRestoreSession, handleViewArchivedSession, isViewingArchived, handleExitArchivedView],
   )
 
+  // Stable binding for SessionPanel — prevents React.memo from being
+  // defeated by a new object reference on every IssueDetailView render.
+  const sessionBinding = useMemo(() => ({
+    kind: 'issue' as const,
+    issueId,
+    archivedSessionId: viewingArchivedSessionId,
+  }), [issueId, viewingArchivedSessionId])
+
   /** Toggle console expand/collapse by resizing the issue info panel. */
   const handleToggleConsoleExpand = useCallback(() => {
     const panel = issueInfoPanelRef.current
@@ -1107,11 +1115,7 @@ export function IssueDetailView({ issueId, onClose, onNavigateToIssue }: IssueDe
                 />
               ) : (
                 <SessionPanel
-                  binding={{
-                    kind: 'issue',
-                    issueId,
-                    archivedSessionId: viewingArchivedSessionId,
-                  }}
+                  binding={sessionBinding}
                   lifecycle={issue.status === 'done' || issue.status === 'cancelled' ? 'readonly' : 'active'}
                   isStarting={isStarting}
                   capabilities={capabilities}

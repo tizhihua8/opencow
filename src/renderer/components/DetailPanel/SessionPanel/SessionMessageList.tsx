@@ -8,7 +8,8 @@ import { LinkifiedText } from '@/components/ui/LinkifiedText'
 import { ContentBlockRenderer } from './ContentBlockRenderer'
 import { SystemEventView } from './SystemEventView'
 import { TaskEventsProvider, buildTaskLifecycleMap, resolveTaskFinalStates, isConsumedTaskEvent } from './TaskWidgets'
-import { ToolLifecycleProvider, buildToolLifecycleMap } from './ToolLifecycleContext'
+import { ToolLifecycleProvider } from './ToolLifecycleContext'
+import type { ToolLifecycle, ToolLifecycleMap } from './ToolLifecycleContext'
 import { ToolBatchCollapsible, groupMessages } from './ToolBatchCollapsible'
 import type { MessageGroup } from './ToolBatchCollapsible'
 import { SessionScrollNav } from './SessionScrollNav'
@@ -21,6 +22,7 @@ import { DiffChangesDialog } from './DiffChangesDialog'
 import { hasFileChanges, countChangedFiles } from './extractFileChanges'
 import { useDialogState } from '@/hooks/useModalAnimation'
 import { useAutoFollow } from '@/hooks/useAutoFollow'
+import { useIncrementalMemo } from '@/hooks/useIncrementalMemo'
 import { cn } from '@/lib/utils'
 import { parseContextFiles } from '@/lib/contextFilesParsing'
 import { ContextFileChips } from '@/components/ui/ContextFileChips'
@@ -90,6 +92,90 @@ interface SessionMessageListProps {
   /** Issue ID — forwarded to DiffChangesDialog for the review chat feature */
   issueId?: string
 }
+
+// ---------------------------------------------------------------------------
+// Incremental processors — stable module-level functions for useIncrementalMemo.
+// Must NOT capture component scope (no closures) to maintain reference stability.
+// ---------------------------------------------------------------------------
+
+/** Incremental processor: scan new messages for tool_use blocks → ToolLifecycleMap. */
+function scanToolLifecycle(
+  newMsgs: readonly ManagedSessionMessage[],
+  prev: ToolLifecycleMap,
+  _allMsgs: readonly ManagedSessionMessage[],
+): ToolLifecycleMap {
+  let next: Map<string, ToolLifecycle> | null = null
+  for (const msg of newMsgs) {
+    if (msg.role === 'system') continue
+    for (const block of msg.content) {
+      if (block.type === 'tool_use') {
+        if (!next) next = new Map(prev) // copy-on-write
+        next.set(block.id, { name: block.name })
+      }
+    }
+  }
+  return next ?? prev
+}
+
+/** Factory for empty ToolLifecycleMap — stable reference for useIncrementalMemo init. */
+const INIT_TOOL_MAP = (): ToolLifecycleMap => new Map()
+
+/** Accumulator for incremental navAnchors — carries scanning state across calls. */
+interface NavAnchorAccumulator {
+  anchors: NavAnchor[]
+  inAssistantTurn: boolean
+}
+
+const NAV_PREVIEW_MAX = 80
+
+/** Incremental processor: scan new messages for user/assistant turn boundaries. */
+function scanNavAnchors(
+  newMsgs: readonly ManagedSessionMessage[],
+  prev: NavAnchorAccumulator,
+  _allMsgs: readonly ManagedSessionMessage[],
+): NavAnchorAccumulator {
+  let next = prev
+  let { inAssistantTurn } = prev
+
+  for (const msg of newMsgs) {
+    if (msg.role === 'user') {
+      inAssistantTurn = false
+      const text = extractUserText(msg.content).trim()
+      const slashNames = joinSlashDisplays(
+        msg.content.filter((b): b is SlashCommandBlock => b.type === 'slash_command'),
+      )
+      const hasMedia = msg.content.some((b) => b.type === 'image' || b.type === 'document')
+      const hasSlashCmd = slashNames.length > 0
+      if (!text && !hasMedia && !hasSlashCmd) continue
+      if (next === prev) next = { ...prev, anchors: [...prev.anchors] } // copy-on-write
+      next.anchors.push({
+        msgId: msg.id,
+        role: 'user',
+        preview: unicodeTruncate(hasSlashCmd ? `${slashNames} ${text}`.trim() : text || '(attachment)', { max: NAV_PREVIEW_MAX }),
+      })
+    } else if (msg.role === 'assistant' && !inAssistantTurn) {
+      inAssistantTurn = true
+      const textBlock = msg.content.find((b) => b.type === 'text')
+      const text = textBlock?.type === 'text' ? textBlock.text.trim() : ''
+      if (next === prev) next = { ...prev, anchors: [...prev.anchors] }
+      next.anchors.push({
+        msgId: msg.id,
+        role: 'assistant',
+        preview: unicodeTruncate(text || '(working\u2026)', { max: NAV_PREVIEW_MAX }),
+      })
+    }
+  }
+
+  // Update scanning state even if no new anchors were added
+  if (inAssistantTurn !== prev.inAssistantTurn) {
+    if (next === prev) next = { ...prev }
+    next.inAssistantTurn = inAssistantTurn
+  }
+  return next
+}
+
+/** Factory for empty NavAnchorAccumulator. */
+const INIT_NAV_ANCHORS_ACC = (): NavAnchorAccumulator => ({ anchors: [], inAssistantTurn: false })
 
 // ---------------------------------------------------------------------------
 // Helpers — pure text extraction
@@ -700,13 +786,19 @@ function SessionMessageList({ sessionId, messages: externalMessages, sessionStat
     [scannedTaskMap, sessionState, stopReason],
   )
 
-  // Build tool lifecycle map: toolUseId → { name, result? }
-  // Used by ToolResultBlockView (rich cards) and Widget Tools (result access).
-  const toolLifecycleMap = useMemo(() => buildToolLifecycleMap(messages), [messages])
+  // Build tool lifecycle map: toolUseId → { name }
+  // Incremental: O(delta) via useIncrementalMemo — only scans new messages.
+  const toolLifecycleMap = useIncrementalMemo<ManagedSessionMessage, ToolLifecycleMap>(
+    messages,
+    sessionId,
+    scanToolLifecycle,
+    INIT_TOOL_MAP,
+  )
 
   // Group consecutive tool-only assistant messages into collapsible batches.
   // Depends on `messages` and `consumedTaskIds` — both are stable across
   // sessionState changes, so Stop Session never triggers a recompute here.
+  // Critical path: drives Virtuoso data, must use immediate `messages`.
   const messageGroups = useMemo(() => {
     const filtered = messages.filter((msg) => {
       if (msg.role === 'system' && isConsumedTaskEvent(msg.event, consumedTaskIds)) return false
@@ -832,42 +924,15 @@ function SessionMessageList({ sessionId, messages: externalMessages, sessionStat
 
   // ---------------------------------------------------------------------------
   // Scroll navigation anchors — grouped by conversation turn
+  // Incremental: O(delta) via useIncrementalMemo.
   // ---------------------------------------------------------------------------
-  const navAnchors = useMemo<NavAnchor[]>(() => {
-    const MAX_PREVIEW = 80
-    const truncateText = (s: string): string => unicodeTruncate(s, { max: MAX_PREVIEW })
-
-    const anchors: NavAnchor[] = []
-    let inAssistantTurn = false
-
-    for (const msg of messages) {
-      if (msg.role === 'user') {
-        inAssistantTurn = false
-        const text = extractUserText(msg.content).trim()
-        const slashNames = joinSlashDisplays(
-          msg.content.filter((b): b is SlashCommandBlock => b.type === 'slash_command'),
-        )
-        const hasMedia = msg.content.some((b) => b.type === 'image' || b.type === 'document')
-        const hasSlashCmd = slashNames.length > 0
-        if (!text && !hasMedia && !hasSlashCmd) continue
-        anchors.push({
-          msgId: msg.id,
-          role: 'user',
-          preview: truncateText(hasSlashCmd ? `${slashNames} ${text}`.trim() : text || '(attachment)'),
-        })
-      } else if (msg.role === 'assistant' && !inAssistantTurn) {
-        inAssistantTurn = true
-        const textBlock = msg.content.find((b) => b.type === 'text')
-        const text = textBlock?.type === 'text' ? textBlock.text.trim() : ''
-        anchors.push({
-          msgId: msg.id,
-          role: 'assistant',
-          preview: truncateText(text || '(working\u2026)'),
-        })
-      }
-    }
-    return anchors
-  }, [messages])
+  const navAnchorsResult = useIncrementalMemo<ManagedSessionMessage, NavAnchorAccumulator>(
+    messages,
+    sessionId,
+    scanNavAnchors,
+    INIT_NAV_ANCHORS_ACC,
+  )
+  const navAnchors = navAnchorsResult.anchors
 
   // ---------------------------------------------------------------------------
   // Active anchor tracking — uses Virtuoso's rangeChanged instead of

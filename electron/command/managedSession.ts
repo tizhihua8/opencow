@@ -685,6 +685,11 @@ export class ManagedSession {
     return id
   }
 
+  /** Resolve a system event refId to its message ID. Returns undefined if not found. */
+  getSystemEventMessageId(refId: string): string | undefined {
+    return this.systemEventIndex.get(refId)
+  }
+
   updateSystemEvent(refId: string, updater: (event: SystemEvent) => void): void {
     const msgId = this.systemEventIndex.get(refId)
     if (!msgId) return

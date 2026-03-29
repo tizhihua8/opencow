@@ -9,23 +9,27 @@
  */
 
 /**
- * Maximum interval between IPC dispatches for streaming updates (~60 fps).
+ * Maximum interval between IPC dispatches for streaming updates (~20 fps).
  *
  * Used by:
  *   - DispatchThrottle (assistant.partial / tool.progress / hook_progress coalescing)
  *   - ToolProgressRelay (Evose relay default throttle)
  *
- * 16 ms ≈ 60 dispatches/sec, aligned with the browser's requestAnimationFrame
- * cadence.  Each dispatch carries a full message snapshot (~1-10 KB); at 60 fps
- * this amounts to 60-600 KB/sec of IPC throughput — well within Electron's
- * structured-clone capacity.
+ * 50 ms ≈ 20 dispatches/sec.  Each dispatch carries a full message snapshot
+ * via Electron structured-clone (~1-50 KB depending on response length).
+ * At 60 fps (16 ms) the per-frame IPC serialisation cost grew linearly with
+ * message size and consumed 1-5 ms of the renderer's 16 ms frame budget,
+ * leaving insufficient headroom for input handling and scroll events — causing
+ * perceptible UI lag during active streaming.
  *
- * The renderer's rAF buffer (`useAppBootstrap.ts`) further coalesces these into
- * at most one store update per animation frame, so increasing the dispatch rate
- * does NOT increase React render frequency — it only reduces the token-to-pixel
- * latency from ~50ms to ~16ms, making streaming feel noticeably smoother.
+ * Raising the interval to 50 ms reduces IPC dispatches by ~66%, freeing
+ * ~3-8 ms/frame for user interaction.  The renderer's write-coalescing buffer
+ * (`useAppBootstrap.ts`) further batches these into at most one Zustand
+ * store update per 33 ms, so the visual streaming cadence is ~20-30 fps —
+ * perceptually smooth for text content.
  *
- * Previous value was 50ms (20 fps), which created visible text "chunking"
- * compared to modern streaming UIs (Claude.ai, ChatGPT) that update at 30-60fps.
+ * Terminal events (assistant.final, turn.result, protocol.violation) call
+ * `DispatchThrottle.flushNow()` and bypass this interval entirely, so final
+ * messages are never delayed.
  */
-export const DISPATCH_THROTTLE_INTERVAL_MS = 16
+export const DISPATCH_THROTTLE_INTERVAL_MS = 50

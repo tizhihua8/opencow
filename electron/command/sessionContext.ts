@@ -66,6 +66,26 @@ export class SessionContext {
   readonly onStreamStarted: () => void
   readonly onResultReceived: () => void
 
+  /**
+   * Message IDs queued for dispatch on the next throttle flush.
+   *
+   * System events (task_started, hook_started, etc.) are non-interactive
+   * messages that don't need immediate IPC dispatch. Instead of calling
+   * `dispatchLastMessage()` immediately (which creates a separate IPC
+   * event and triggers a separate renderer slow-path), they queue their
+   * message ID here and call `throttle.scheduleMessage()`.
+   *
+   * When the throttle fires `onFlushMessage`, queued IDs are dispatched
+   * alongside the streaming message in a single burst — the renderer's
+   * write-coalescing buffer (`useAppBootstrap._pendingMsgs`) batches
+   * them into ONE `batchAppendSessionMessages` call, triggering ONE
+   * slow-path merge instead of 3-5.
+   *
+   * `flushNow()` (from terminal events) also drains this queue,
+   * ensuring no messages are lost.
+   */
+  private _pendingMessageIds: string[] = []
+
   constructor(params: SessionContextParams) {
     this.sessionId = params.session.id
     this.session = params.session
@@ -80,11 +100,11 @@ export class SessionContext {
 
     this.throttle = new DispatchThrottle({
       onFlushMessage: () => {
+        // Dispatch queued system event messages first — ensures the
+        // renderer sees them in the same batch as the streaming message.
+        this._flushPendingMessageIds()
+
         // Dispatch the streaming message by its tracked ID when available.
-        // This is more correct than dispatchLastMessage() because system
-        // events (task_started, hook_started) may have been appended after
-        // the streaming message, making getLastMessage() return the wrong
-        // message. See BUG-1 analysis in the dispatch throttle design doc.
         const streamingId = this.stream.streamingMessageId
         if (streamingId) {
           this.dispatchMessageById(streamingId)
@@ -94,6 +114,33 @@ export class SessionContext {
       },
       onFlushSession: () => this.dispatchSessionUpdated(),
     })
+  }
+
+  /**
+   * Queue a message for dispatch on the next throttle flush.
+   *
+   * Use for non-interactive messages (system events) that benefit from
+   * being coalesced with the streaming message dispatch.
+   */
+  queueMessageDispatch(messageId: string): void {
+    this._pendingMessageIds.push(messageId)
+    this.throttle.scheduleMessage()
+  }
+
+  /**
+   * Drain the pending message queue, dispatching each by ID.
+   *
+   * Safe against stale IDs: if a queued message was removed between
+   * queueing and flushing (e.g., session reset), `dispatchMessageById`
+   * silently skips it (`getMessageById` returns null).
+   */
+  private _flushPendingMessageIds(): void {
+    if (this._pendingMessageIds.length === 0) return
+    const ids = this._pendingMessageIds
+    this._pendingMessageIds = []
+    for (const id of ids) {
+      this.dispatchMessageById(id)
+    }
   }
 
   /**
@@ -164,10 +211,11 @@ export class SessionContext {
     })
   }
 
-  /** Session end: cancel all timers, clear relay and throttle. */
+  /** Session end: cancel all timers, clear relay, throttle, and pending queue. */
   dispose(): void {
     this.throttle.dispose()
     this.timers.dispose()
     this.relay.clear()
+    this._pendingMessageIds = []
   }
 }

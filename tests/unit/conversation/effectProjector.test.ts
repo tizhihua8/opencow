@@ -21,6 +21,7 @@ function makeContext(params: { engineKind: 'claude' | 'codex' }) {
     dispatchSessionUpdated: vi.fn(),
     dispatchLastMessage: vi.fn(),
     dispatchMessageById: vi.fn(),
+    queueMessageDispatch: vi.fn(),
     timers: { cancel: vi.fn(), set: vi.fn() },
     throttle: { scheduleSession: vi.fn(), scheduleMessage: vi.fn(), flushNow: vi.fn() },
     isSessionAlive: vi.fn(() => true),

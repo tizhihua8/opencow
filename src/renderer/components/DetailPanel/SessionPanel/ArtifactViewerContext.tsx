@@ -15,6 +15,8 @@
  * - ArtifactViewerDialog is rendered by SessionPanel, outside conditional blocks
  */
 import { createContext, useContext, useMemo, type ReactNode } from 'react'
+import { useIncrementalMemo } from '@/hooks/useIncrementalMemo'
+import type { ManagedSessionMessage } from '@shared/types'
 import { useDialogState } from '@/hooks/useModalAnimation'
 import { useArtifactStarMap } from './useArtifactStarMap'
 import type { StarState } from './useArtifactStarMap'
@@ -87,6 +89,27 @@ interface ArtifactViewerProviderProps {
   children: ReactNode
 }
 
+/**
+ * Full-rebuild processor for artifact extraction.
+ *
+ * extractSessionArtifacts accumulates per-file state (writes/edits count)
+ * that makes pure incremental processing infeasible.  Instead, the
+ * useIncrementalMemo gate ensures this only runs when messages.length
+ * actually increases — not on every sessionMessages reference change.
+ *
+ * Module-level function to maintain stable reference identity across renders
+ * (inline arrows would defeat useMemo dependency tracking).
+ */
+function rebuildArtifacts(
+  _newMsgs: readonly ManagedSessionMessage[],
+  _prev: ExtractedArtifact[],
+  allMsgs: readonly ManagedSessionMessage[],
+): ExtractedArtifact[] {
+  return extractSessionArtifacts(allMsgs as ManagedSessionMessage[])
+}
+
+const INIT_ARTIFACTS = (): ExtractedArtifact[] => []
+
 export function ArtifactViewerProvider({
   sessionId,
   issueId,
@@ -97,8 +120,19 @@ export function ArtifactViewerProvider({
   // Subscribe to messages and derive artifacts — this computation was previously
   // in SessionPanel, causing the entire 756-line component to re-render on
   // every message change.  Now it lives here, scoped to the provider subtree.
+  //
+  // Uses useIncrementalMemo for sessionId-aware cache invalidation.
+  // extractSessionArtifacts accumulates state per file path (writes/edits),
+  // so it cannot be made purely incremental.  The message-count gate skips
+  // the expensive extraction when sessionMessages reference changes without
+  // new content (e.g. streaming → final transition).
   const messages = useCommandStore((s) => selectSessionMessages(s, sessionId))
-  const artifacts = useMemo(() => extractSessionArtifacts(messages), [messages])
+  const artifacts = useIncrementalMemo<ManagedSessionMessage, ExtractedArtifact[]>(
+    messages,
+    sessionId,
+    rebuildArtifacts,
+    INIT_ARTIFACTS,
+  )
 
   // Dialog state — keyed by stable artifact ID (filePath ?? contentHash)
   const viewer = useDialogState<string>()

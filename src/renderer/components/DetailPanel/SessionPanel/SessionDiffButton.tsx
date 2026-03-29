@@ -10,11 +10,32 @@
  * Extracted from SessionPanel so it owns its own messages subscription,
  * preventing SessionPanel from re-rendering on every streaming chunk.
  */
-import React, { useMemo } from 'react'
+import React from 'react'
 import { GitCompare } from 'lucide-react'
 import { useCommandStore, selectSessionMessages } from '@/stores/commandStore'
-import { hasFileChanges } from './extractFileChanges'
+import { useIncrementalMemo } from '@/hooks/useIncrementalMemo'
 import type { ManagedSessionMessage } from '@shared/types'
+
+/** File-modifying tool names — matched against tool_use block names. */
+const FILE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit'])
+
+/** Incremental processor: monotonic boolean — once true, stays true forever. */
+function scanFileChanges(
+  newMsgs: readonly ManagedSessionMessage[],
+  prev: boolean,
+  _allMsgs: readonly ManagedSessionMessage[],
+): boolean {
+  if (prev) return true // monotonic: never revert
+  for (const msg of newMsgs) {
+    if (msg.role !== 'assistant') continue
+    for (const block of msg.content) {
+      if (block.type === 'tool_use' && FILE_TOOLS.has(block.name)) return true
+    }
+  }
+  return false
+}
+
+const INIT_FALSE = (): boolean => false
 
 interface SessionDiffButtonProps {
   sessionId: string
@@ -29,7 +50,7 @@ export function SessionDiffButton({
   onShowDiff,
 }: SessionDiffButtonProps): React.JSX.Element | null {
   const messages = useCommandStore((s) => selectSessionMessages(s, sessionId))
-  const sessionHasChanges = useMemo(() => hasFileChanges(messages), [messages])
+  const sessionHasChanges = useIncrementalMemo(messages, sessionId, scanFileChanges, INIT_FALSE)
   if (!sessionHasChanges || isProcessing) return null
   return (
     <button

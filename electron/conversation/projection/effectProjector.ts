@@ -336,8 +336,9 @@ export function applyConversationDomainEffects(params: {
         // No state transition — compact is engine-internal, the session
         // remains streaming so the UI stays stable (no input-bar flicker).
 
-        ctx.dispatchLastMessage()          // immediate: adds new message
-        ctx.throttle.scheduleSession()     // throttled: coalesce O(n) getInfo()
+        // Queued: see apply_system_task_started rationale.
+        ctx.queueMessageDispatch(compactMsgId)
+        ctx.throttle.scheduleSession()
 
         ctx.timers.set('compact_boundary', () => {
           if (!ctx.isSessionAlive()) return
@@ -348,6 +349,8 @@ export function applyConversationDomainEffects(params: {
             }
           })
           ctx.session.setActivity(null)
+          // Timer callback fires ~1.5s later — no throttle benefit,
+          // dispatch immediately for prompt UI update.
           ctx.dispatchMessageById(compactMsgId)
           ctx.dispatchSessionUpdated()
         }, 1500)
@@ -355,7 +358,7 @@ export function applyConversationDomainEffects(params: {
       }
 
       case 'apply_system_task_started': {
-        ctx.session.addSystemEvent({
+        const msgId = ctx.session.addSystemEvent({
           type: 'task_started',
           taskId: effect.payload.taskId,
           toolUseId: effect.payload.toolUseId,
@@ -363,13 +366,21 @@ export function applyConversationDomainEffects(params: {
           taskType: effect.payload.taskType,
         })
         ctx.session.setActivity(`Task: ${effect.payload.description.slice(0, 40)}`)
-        ctx.dispatchLastMessage()          // immediate: adds new message
-        ctx.throttle.scheduleSession()     // throttled: coalesce O(n) getInfo()
+        // Queued: system events are not user-visible instant feedback.
+        // queueMessageDispatch() defers dispatch to the next throttle
+        // window, where all queued system events + the streaming message
+        // are dispatched in a single burst.  The renderer's write-coalescing
+        // buffer batches them into ONE batchAppendSessionMessages call —
+        // triggering ONE slow-path merge instead of 3-5.
+        // Terminal events (apply_assistant_final, apply_turn_result) call
+        // flushNow() which drains this queue before the terminal dispatch.
+        ctx.queueMessageDispatch(msgId)
+        ctx.throttle.scheduleSession()
         break
       }
 
       case 'apply_system_task_notification': {
-        ctx.session.addSystemEvent({
+        const msgId = ctx.session.addSystemEvent({
           type: 'task_notification',
           taskId: effect.payload.taskId,
           toolUseId: effect.payload.toolUseId,
@@ -385,21 +396,23 @@ export function applyConversationDomainEffects(params: {
             : undefined,
         })
         ctx.session.setActivity(null)
-        ctx.dispatchLastMessage()          // immediate: adds new message
-        ctx.throttle.scheduleSession()     // throttled: coalesce O(n) getInfo()
+        // Queued: see apply_system_task_started rationale.
+        ctx.queueMessageDispatch(msgId)
+        ctx.throttle.scheduleSession()
         break
       }
 
       case 'apply_system_hook_started': {
-        ctx.session.addSystemEvent({
+        const msgId = ctx.session.addSystemEvent({
           type: 'hook',
           hookId: effect.payload.hookId,
           hookName: effect.payload.hookName,
           hookTrigger: effect.payload.hookTrigger,
         })
         ctx.session.setActivity(`Hook: ${effect.payload.hookName}`)
-        ctx.dispatchLastMessage()          // immediate: adds new message
-        ctx.throttle.scheduleSession()     // throttled: coalesce O(n) getInfo()
+        // Queued: see apply_system_task_started rationale.
+        ctx.queueMessageDispatch(msgId)
+        ctx.throttle.scheduleSession()
         break
       }
 
@@ -424,8 +437,12 @@ export function applyConversationDomainEffects(params: {
           }
         })
         ctx.session.setActivity(null)
-        ctx.dispatchLastMessage()          // immediate: final hook state (once per hook)
-        ctx.throttle.scheduleSession()     // throttled: coalesce O(n) getInfo()
+        // Queued: final hook state dispatched with next throttle flush.
+        // flushNow() from terminal events ensures this reaches the renderer
+        // before the session finalizes.
+        const hookMsgId = ctx.session.getSystemEventMessageId(`hook:${effect.payload.hookId}`)
+        if (hookMsgId) ctx.queueMessageDispatch(hookMsgId)
+        ctx.throttle.scheduleSession()
         break
       }
 
