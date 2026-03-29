@@ -29,3 +29,25 @@ export interface LLMAuthConfig {
   /** Model identifier (e.g. "claude-sonnet-4-20250514", "gpt-4o-mini") */
   model: string
 }
+
+// ─── HeadlessLLMClient ───────────────────────────────────────
+
+export interface HeadlessQueryParams {
+  systemPrompt: string
+  userMessage: string
+  /** Max output tokens. Default: 4096 */
+  maxTokens?: number
+  /** Request timeout in ms. Default: 30_000 */
+  timeoutMs?: number
+}
+
+export interface HeadlessLLMClient {
+  query(params: HeadlessQueryParams): Promise<string>
+}
+
+export interface HeadlessClientDeps {
+  /** Resolves structured HTTP auth (engine-aware, dynamic per call) */
+  resolveAuth: () => Promise<LLMAuthConfig>
+  /** Returns a proxy-aware fetch function */
+  getFetch: () => typeof globalThis.fetch
+}

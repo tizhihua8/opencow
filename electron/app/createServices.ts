@@ -52,6 +52,8 @@ import { createMemoryStorage } from '../memory/storage'
 import { MemoryService } from '../memory/memoryService'
 import { MAX_SESSION_CONTENT_LENGTH } from '../memory/constants'
 import { prepareExtractionContent } from '../memory/contentPreparer'
+import { HeadlessLLMClientImpl } from '../llm/headlessLLMClient'
+import { resolveActiveEngine } from '../llm/resolveActiveEngine'
 import { GitCommandExecutor } from '../services/git/gitCommandExecutor'
 import { EvoseService } from '../services/evoseService'
 import { ScheduleStore } from '../services/scheduleStore'
@@ -553,13 +555,24 @@ export async function createAppServices(deps: ServiceFactoryDeps): Promise<AppSe
   // ── Phase 0.8: Memory System ───────────────────────────────────────────
 
   const memoryStorage = createMemoryStorage({ type: 'sqlite', db: database.db })
+
+  // HeadlessLLMClient: engine-agnostic single-turn text generation for memory extraction.
+  // Uses Vercel AI SDK (@ai-sdk/anthropic, @ai-sdk/openai) — no SDK subprocess needed.
+  const headlessClient = new HeadlessLLMClientImpl({
+    resolveAuth: () => {
+      const engine = resolveActiveEngine(
+        settingsService.getProviderSettings(),
+        settingsService.getCommandDefaults().defaultEngine,
+      )
+      return providerService.resolveHTTPAuth(engine)
+    },
+    getFetch: () => proxyFetchFactory.getStandardFetch(),
+  })
+
   memoryService = new MemoryService({
     bus,
     store: memoryStorage,
-    extractorDeps: {
-      getProviderEnv: () => providerService.getProviderEnv('claude'),
-      getProxyEnv: () => settingsService.getProxyEnv(),
-    },
+    extractorDeps: { llmClient: headlessClient },
     getSessionContent: async (sessionId: string) => {
       const session = await orchestrator.getFullSession(sessionId)
       if (!session?.messages?.length) return null

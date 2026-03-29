@@ -1,16 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * MemoryExtractor — uses the Claude Agent SDK to extract structured
- * memories from interaction events.
+ * MemoryExtractor — extracts structured memories from interaction events.
  *
- * Uses a headless SDK query (no tools, single turn) to analyse
- * interaction content and return candidate memories as JSON.
+ * Uses a HeadlessLLMClient (Vercel AI SDK) for single-turn text generation.
+ * The client is engine-agnostic — it automatically uses whichever LLM engine
+ * (Claude / Codex) the user has configured in Settings.
  */
 
-import { existsSync } from 'node:fs'
-import type { Query, SDKMessage, Options as SdkOptions } from '@anthropic-ai/claude-agent-sdk'
-import { MessageQueue } from '../command/messageQueue'
 import { createLogger } from '../platform/logger'
 import { buildExtractionPrompt, type ExtractionPromptParams } from './prompts/extractionPrompt'
 import type { InteractionEvent, CandidateMemory, CandidateAction } from './types'
@@ -18,29 +15,14 @@ import type { MemoryItem, MemoryScope } from '@shared/types'
 import { MEMORY_LIMITS } from '@shared/types'
 import { clampConfidence, isValidMemoryCategory, isValidMemoryScope } from './validation'
 import { MAX_EXISTING_MEMORIES_IN_PROMPT, EXTRACTION_TIMEOUT_MS, MIN_PRE_FILTER_CONTENT_LENGTH, MAX_PRE_FILTER_CONTENT_LENGTH } from './constants'
+import type { HeadlessLLMClient } from '../llm/types'
 
 const log = createLogger('MemoryExtractor')
-
-// ─── CLI Path Resolution ───────────────────────────────────────────
-
-function resolveCliPath(): string | undefined {
-  try {
-    const cliPath = require.resolve('@anthropic-ai/claude-agent-sdk/cli.js')
-    if (cliPath.includes('app.asar')) {
-      const unpacked = cliPath.replace('app.asar', 'app.asar.unpacked')
-      if (existsSync(unpacked)) return unpacked
-    }
-    return cliPath
-  } catch {
-    return undefined
-  }
-}
 
 // ─── Dependencies ──────────────────────────────────────────────────
 
 export interface MemoryExtractorDeps {
-  getProviderEnv: () => Promise<Record<string, string>>
-  getProxyEnv: () => Record<string, string>
+  llmClient: HeadlessLLMClient
 }
 
 // ─── Relevance Pre-Filter ──────────────────────────────────────────
@@ -103,94 +85,16 @@ export class MemoryExtractor {
     const defaultScope: MemoryScope = event.projectId ? 'project' : 'user'
 
     try {
-      const responseText = await this.runQuery(prompt)
+      const responseText = await this.deps.llmClient.query({
+        systemPrompt: 'You are a memory extraction assistant. Return ONLY valid JSON, no markdown fences or explanation.',
+        userMessage: prompt,
+        timeoutMs: EXTRACTION_TIMEOUT_MS,
+      })
       return this.parseResponse(responseText, defaultScope)
     } catch (err) {
       log.error('Extraction failed', err)
       return []
     }
-  }
-
-  /**
-   * Run a headless SDK query to get the extraction response.
-   */
-  private async runQuery(userMessage: string): Promise<string> {
-    let providerEnv: Record<string, string>
-    try {
-      providerEnv = await this.deps.getProviderEnv()
-    } catch (err) {
-      throw new Error(`Failed to resolve provider environment: ${err instanceof Error ? err.message : String(err)}`)
-    }
-    const proxyEnv = this.deps.getProxyEnv()
-
-    const env: Record<string, string> = {
-      ...process.env as Record<string, string>,
-      ...proxyEnv,
-      ...providerEnv,
-    }
-
-    const cliPath = resolveCliPath()
-
-    const queue = new MessageQueue()
-    queue.push(userMessage)
-
-    const options: SdkOptions = {
-      systemPrompt:
-        'You are a memory extraction assistant. Return ONLY valid JSON, no markdown fences or explanation.',
-      maxTurns: 1,
-      env,
-      tools: [],
-      disallowedTools: [],
-      allowDangerouslySkipPermissions: true,
-      permissionMode: 'acceptEdits',
-      ...(cliPath ? { pathToClaudeCodeExecutable: cliPath } : {}),
-    }
-
-    // Lazy import — avoid loading the heavy SDK module at app startup
-    const { query: sdkQuery } = await import('@anthropic-ai/claude-agent-sdk')
-    const sdkStream: Query = sdkQuery({ prompt: queue, options })
-
-    // Set up timeout
-    let timedOut = false
-    const timeoutId = setTimeout(() => {
-      timedOut = true
-      sdkStream.close()
-    }, EXTRACTION_TIMEOUT_MS)
-
-    let result = ''
-
-    try {
-      for await (const message of sdkStream) {
-        const raw = message as Record<string, unknown>
-        const type = typeof raw.type === 'string' ? raw.type : ''
-        const subtype = typeof raw.subtype === 'string' ? raw.subtype : null
-
-        // Complete assistant message (type='assistant', subtype=null)
-        // Contains the full response — replaces any partial accumulation.
-        // SDK structure: { type: 'assistant', message: { content: ContentBlock[] } }
-        if (type === 'assistant' && subtype === null) {
-          const messageObj = raw.message as { content?: Array<Record<string, unknown>> } | undefined
-          const blocks = messageObj?.content ?? []
-          // Final message contains complete text — reset to avoid duplication with partials
-          result = ''
-          for (const block of blocks) {
-            if (block.type === 'text' && typeof block.text === 'string') {
-              result += block.text
-            }
-          }
-        }
-      }
-    } catch (err) {
-      if (timedOut) {
-        throw new Error('Memory extraction timed out')
-      }
-      throw err
-    } finally {
-      clearTimeout(timeoutId)
-      queue.close()
-    }
-
-    return result
   }
 
   /**
@@ -267,24 +171,15 @@ export class MemoryExtractor {
   /**
    * Attempt to repair a truncated JSON response from the LLM.
    *
-   * When the LLM times out mid-generation, the JSON is often cut off inside
-   * the memories array. Strategy: drop the last (incomplete) memory entry
-   * and close the array/object brackets.
-   *
-   * Returns the repaired string, or null if repair is not feasible.
+   * When the LLM hits maxTokens mid-generation, the JSON may be cut off.
+   * Strategy: drop the last (incomplete) memory entry and close brackets.
    */
   private repairTruncatedJson(text: string): string | null {
-    // Must start with a JSON object
     if (!text.startsWith('{')) return null
 
-    // Find the last complete memory object by locating the last `}, {` or `}]`
     const lastCompleteObject = text.lastIndexOf('},')
-    if (lastCompleteObject === -1) {
-      // No complete memory object found — can't salvage
-      return null
-    }
+    if (lastCompleteObject === -1) return null
 
-    // Truncate after the last complete object and close the structure
     const truncated = text.slice(0, lastCompleteObject + 1)
     const repaired = truncated + ']}'
 
