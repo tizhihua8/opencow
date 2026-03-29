@@ -42,14 +42,41 @@ interface HookCommand {
   command: string
 }
 
+/**
+ * Maximum **characters** to keep for the raw hook payload.
+ *
+ * PostToolUse events from Claude Code can carry multi-MB tool_response blobs
+ * (file contents, grep results, command output). These are useless for event
+ * tracking — only metadata (session_id, tool_name, event_name) matters.
+ *
+ * When the payload exceeds this limit the entire line is truncated,
+ * producing invalid JSON that {@link parseHookLogLine} safely discards.
+ * This "drop oversized events" semantic is cleaner and more predictable
+ * than silently mutating individual JSON fields.
+ *
+ * Note: bash `${#var}` counts characters, not bytes. For ASCII-dominated
+ * JSON payloads the difference is negligible. We use character count to
+ * avoid shelling out to `wc -c` on every hook invocation.
+ */
+const MAX_LINE_CHARS = 4096
+
 function makeHookScript(eventsLogPath: string): string {
   return `#!/bin/bash
-# OpenCow event logger - captures Claude Code hook events
+# OpenCow event logger – append Claude Code hook payload to events.jsonl
+# Design: zero external dependencies, truncate oversized payloads at line level.
 EVENT_LOG="${eventsLogPath}"
 mkdir -p "$(dirname "$EVENT_LOG")"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 INPUT=$(cat -)
-echo "{\\"timestamp\\":\\"$TIMESTAMP\\",\\"payload\\":$INPUT}" >> "$EVENT_LOG"
+
+# Drop oversized payloads (PostToolUse with full file content / grep output).
+# Truncated line = invalid JSON → HookSource parser safely ignores it.
+# Note: \${#INPUT} counts characters (not bytes); acceptable for ASCII-dominated JSON.
+if [ \${#INPUT} -gt ${MAX_LINE_CHARS} ]; then
+  INPUT="\${INPUT:0:${MAX_LINE_CHARS}}"
+fi
+
+echo "{\\"timestamp\\":\\"$TIMESTAMP\\",\\"payload\\":\$INPUT}" >> "$EVENT_LOG"
 `
 }
 

@@ -112,7 +112,7 @@ function makeAppState(overrides: Partial<AppStateMain> = {}): AppStateMain {
 function createMockStore() {
   return {
     load: vi.fn().mockResolvedValue([]),
-    compact: vi.fn().mockResolvedValue(undefined),
+    compact: vi.fn().mockResolvedValue({ archivedDeleted: 0, readExpired: 0, trimmed: 0 }),
     add: vi.fn().mockResolvedValue(true),
     update: vi.fn().mockImplementation(
       (id: string, status: InboxMessageStatus) =>
@@ -192,15 +192,16 @@ describe('InboxService', () => {
   })
 
   describe('start()', () => {
-    it('calls store.load() and store.compact()', async () => {
+    it('calls store.compact() before store.load()', async () => {
       await service.start()
 
-      expect(mockStore.load).toHaveBeenCalledOnce()
       expect(mockStore.compact).toHaveBeenCalledOnce()
-      // load should be called before compact
-      const loadOrder = mockStore.load.mock.invocationCallOrder[0]
+      expect(mockStore.load).toHaveBeenCalledOnce()
+      // compact must run BEFORE load — ensures detector receives only
+      // live messages, not stale ones that compact just deleted.
       const compactOrder = mockStore.compact.mock.invocationCallOrder[0]
-      expect(loadOrder).toBeLessThan(compactOrder)
+      const loadOrder = mockStore.load.mock.invocationCallOrder[0]
+      expect(compactOrder).toBeLessThan(loadOrder)
     })
 
     it('initializes detector from loaded messages', async () => {

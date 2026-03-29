@@ -4,6 +4,7 @@ import { InboxStore } from './inboxStore'
 import { MessageClassifier } from './messageClassifier'
 import { SmartReminderDetector } from './smartReminderDetector'
 import { allowsEngineEvent, type EventSubscriptionPolicy } from '../events/eventSubscriptionPolicy'
+import { createLogger } from '../platform/logger'
 import type {
   DataBusEvent,
   AppStateMain,
@@ -18,6 +19,8 @@ import type {
 } from '@shared/types'
 import { getOriginIssueId } from '@shared/types'
 
+const log = createLogger('InboxService')
+
 interface InboxServiceParams {
   dispatch: (event: DataBusEvent) => void
   getState: () => AppStateMain
@@ -30,6 +33,9 @@ interface InboxServiceParams {
   resolveScheduleIdBySessionRefs?: (sessionIds: string[]) => Promise<string | null>
 }
 
+/** Run compaction every hour to clean up stale read/archived messages. */
+const COMPACT_INTERVAL = 60 * 60 * 1000
+
 export class InboxService {
   private store: InboxStore
   private classifier: MessageClassifier
@@ -41,6 +47,7 @@ export class InboxService {
   private resolveScheduleIdBySessionRefs: (sessionIds: string[]) => Promise<string | null>
   private getEventSubscriptionPolicy: () => EventSubscriptionPolicy
   private idleScanTimer: ReturnType<typeof setInterval> | null = null
+  private compactTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(params: InboxServiceParams) {
     this.store = params.store
@@ -55,17 +62,25 @@ export class InboxService {
   }
 
   async start(): Promise<void> {
-    const messages = await this.store.load()
+    // Compact FIRST — remove stale messages before loading into memory.
+    // Previous ordering (load → compact → init) caused the detector to
+    // hold references to messages that compact had already deleted.
     await this.store.compact()
+    const messages = await this.store.load()
     this.detector.initializeFromMessages(messages)
     await this.broadcastUpdate()
     this.startIdleScan()
+    this.startPeriodicCompact()
   }
 
   stop(): void {
     if (this.idleScanTimer) {
       clearInterval(this.idleScanTimer)
       this.idleScanTimer = null
+    }
+    if (this.compactTimer) {
+      clearInterval(this.compactTimer)
+      this.compactTimer = null
     }
   }
 
@@ -163,7 +178,26 @@ export class InboxService {
   }
 
   private startIdleScan(): void {
-    this.idleScanTimer = setInterval(() => this.runIdleScan(), 60000)
+    this.idleScanTimer = setInterval(() => {
+      this.runIdleScan().catch((err) => log.warn('Idle scan failed', err))
+    }, 60000)
+  }
+
+  /**
+   * Periodic compaction — removes stale read/archived messages every hour.
+   * Keeps the inbox table bounded during long-running sessions.
+   */
+  private startPeriodicCompact(): void {
+    this.compactTimer = setInterval(async () => {
+      try {
+        const result = await this.store.compact()
+        if (result.archivedDeleted > 0 || result.readExpired > 0 || result.trimmed > 0) {
+          await this.broadcastUpdate()
+        }
+      } catch (err) {
+        log.warn('Periodic compaction failed', err)
+      }
+    }, COMPACT_INTERVAL)
   }
 
   private async runIdleScan(): Promise<void> {

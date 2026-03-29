@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { InteractionSourceAdapter, InteractionEvent } from '../types'
-import { MAX_SESSION_CONTENT_LENGTH } from '../constants'
 
 /**
  * Converts session idle/stopped events into InteractionEvents.
  *
  * Does NOT require `result` in the event payload (it's rarely populated).
  * Instead, the MemoryService resolves session content via getSessionContent().
- * This adapter only gates on event type + stop reason.
+ * This adapter gates on event type, stop reason, and origin source.
  */
 export class SessionInteractionAdapter implements InteractionSourceAdapter {
   sourceType = 'session' as const
@@ -24,6 +23,11 @@ export class SessionInteractionAdapter implements InteractionSourceAdapter {
 
     // Must have a sessionId
     if (!data.sessionId) return false
+
+    // Exclude non-conversational sessions — no user memories to extract
+    const origin = data.origin as Record<string, unknown> | undefined
+    const originSource = typeof origin?.source === 'string' ? origin.source : undefined
+    if (originSource === 'market-analyzer' || originSource === 'schedule') return false
 
     return true
   }

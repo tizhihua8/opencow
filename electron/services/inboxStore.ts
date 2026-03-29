@@ -85,36 +85,36 @@ export class InboxStore {
   }
 
   async markAllRead(): Promise<number> {
-    const now = Date.now()
+    return this.db.transaction().execute(async (trx) => {
+      const now = Date.now()
 
-    // Get all unread messages to update their payloads
-    const unread = await this.db
-      .selectFrom('inbox_messages')
-      .selectAll()
-      .where('status', '=', 'unread')
-      .execute()
-
-    if (unread.length === 0) return 0
-
-    // Update each row's payload + status
-    let updatedCount = 0
-    for (const row of unread) {
-      const normalized = rowToMessage(row)
-      if (!normalized) continue
-      const updated: InboxMessage = { ...normalized, status: 'read', readAt: now }
-      await this.db
-        .updateTable('inbox_messages')
-        .set({
-          status: 'read',
-          read_at: now,
-          payload: JSON.stringify(updated),
-        })
-        .where('id', '=', row.id)
+      const unread = await trx
+        .selectFrom('inbox_messages')
+        .selectAll()
+        .where('status', '=', 'unread')
         .execute()
-      updatedCount += 1
-    }
 
-    return updatedCount
+      if (unread.length === 0) return 0
+
+      let updatedCount = 0
+      for (const row of unread) {
+        const normalized = rowToMessage(row)
+        if (!normalized) continue
+        const updated: InboxMessage = { ...normalized, status: 'read', readAt: now }
+        await trx
+          .updateTable('inbox_messages')
+          .set({
+            status: 'read',
+            read_at: now,
+            payload: JSON.stringify(updated),
+          })
+          .where('id', '=', row.id)
+          .execute()
+        updatedCount += 1
+      }
+
+      return updatedCount
+    })
   }
 
   /**
@@ -179,42 +179,74 @@ export class InboxStore {
     }
   }
 
-  async compact(): Promise<void> {
-    const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000
-    const MAX_MESSAGES = 1000
-    const cutoff = Date.now() - SEVEN_DAYS
+  /**
+   * Compact the inbox by removing stale messages.
+   *
+   * Retention policy (applied in order):
+   *  1. **Archived TTL** — archived messages older than 7 days are deleted.
+   *  2. **Read TTL** — read messages older than 3 days are deleted.
+   *     Once a notification has been read, its value decays rapidly.
+   *  3. **Hard cap** — if the table still exceeds {@link MAX_MESSAGES},
+   *     the oldest read messages are trimmed until we're within bounds.
+   *     Unread messages are never deleted by compaction.
+   *
+   * Called on startup and periodically via {@link InboxService}.
+   */
+  async compact(): Promise<{ archivedDeleted: number; readExpired: number; trimmed: number }> {
+    return this.db.transaction().execute(async (trx) => {
+      const ARCHIVED_TTL = 7 * 24 * 60 * 60 * 1000 // 7 days
+      const READ_TTL = 3 * 24 * 60 * 60 * 1000 // 3 days
+      const MAX_MESSAGES = 500
+      const now = Date.now()
 
-    // Remove old archived messages
-    await this.db
-      .deleteFrom('inbox_messages')
-      .where('status', '=', 'archived')
-      .where('archived_at', '<', cutoff)
-      .execute()
-
-    // Trim excess read messages (oldest first) if over limit
-    const countResult = await this.db
-      .selectFrom('inbox_messages')
-      .select((eb) => eb.fn.countAll().as('count'))
-      .executeTakeFirstOrThrow()
-
-    const total = Number(countResult.count)
-    if (total > MAX_MESSAGES) {
-      const toRemove = total - MAX_MESSAGES
-      // Subquery: select oldest read message IDs to delete
-      await this.db
+      // 1. Remove old archived messages
+      const archivedResult = await trx
         .deleteFrom('inbox_messages')
-        .where(
-          'id',
-          'in',
-          this.db
-            .selectFrom('inbox_messages')
-            .select('id')
-            .where('status', '=', 'read')
-            .orderBy('created_at', 'asc')
-            .limit(toRemove),
-        )
-        .execute()
-    }
+        .where('status', '=', 'archived')
+        .where('archived_at', '<', now - ARCHIVED_TTL)
+        .executeTakeFirst()
+      const archivedDeleted = Number(archivedResult?.numDeletedRows ?? 0n)
+
+      // 2. Remove stale read messages (read for >3 days)
+      const readResult = await trx
+        .deleteFrom('inbox_messages')
+        .where('status', '=', 'read')
+        .where('read_at', '<', now - READ_TTL)
+        .executeTakeFirst()
+      const readExpired = Number(readResult?.numDeletedRows ?? 0n)
+
+      // 3. Hard cap — trim oldest read messages if still over limit
+      let trimmed = 0
+      const countResult = await trx
+        .selectFrom('inbox_messages')
+        .select((eb) => eb.fn.countAll().as('count'))
+        .executeTakeFirstOrThrow()
+
+      const total = Number(countResult.count)
+      if (total > MAX_MESSAGES) {
+        const toRemove = total - MAX_MESSAGES
+        const trimResult = await trx
+          .deleteFrom('inbox_messages')
+          .where(
+            'id',
+            'in',
+            trx
+              .selectFrom('inbox_messages')
+              .select('id')
+              .where('status', '=', 'read')
+              .orderBy('created_at', 'asc')
+              .limit(toRemove),
+          )
+          .executeTakeFirst()
+        trimmed = Number(trimResult?.numDeletedRows ?? 0n)
+      }
+
+      if (archivedDeleted > 0 || readExpired > 0 || trimmed > 0) {
+        log.info('Inbox compacted', { archivedDeleted, readExpired, trimmed })
+      }
+
+      return { archivedDeleted, readExpired, trimmed }
+    })
   }
 }
 

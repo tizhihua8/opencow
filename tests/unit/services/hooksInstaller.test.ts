@@ -20,7 +20,7 @@ const { installHooks, uninstallHooks, isHooksInstalled } = await import(
   '../../../electron/services/hooksInstaller'
 )
 
-const testPaths: DataPaths = {
+const testPaths = {
   root: '/tmp/test-opencow',
   hooks: '/tmp/test-opencow/hooks',
   eventLogger: '/tmp/test-opencow/hooks/event-logger.sh',
@@ -28,7 +28,7 @@ const testPaths: DataPaths = {
   database: '/tmp/test-opencow/app.db',
   settings: '/tmp/test-opencow/settings.json',
   onboarding: '/tmp/test-opencow/onboarding.json',
-}
+} as DataPaths
 
 describe('hooksInstaller', () => {
   beforeEach(() => {
@@ -135,6 +135,23 @@ describe('hooksInstaller', () => {
       expect(scriptCall).toBeDefined()
       const scriptContent = scriptCall![1] as string
       expect(scriptContent).toContain(testPaths.eventsLog)
+    })
+
+    it('hook script uses pure-bash line-level truncation (no jq)', async () => {
+      mockedReadFile.mockResolvedValue('{}')
+
+      await installHooks(testPaths, 'production')
+
+      const scriptCall = mockedWriteFile.mock.calls.find((c) =>
+        (c[0] as string).includes('event-logger.sh')
+      )
+      const scriptContent = scriptCall![1] as string
+
+      // Must NOT depend on jq
+      expect(scriptContent).not.toContain('jq')
+      // Should truncate oversized payloads at line level
+      expect(scriptContent).toContain('${#INPUT}')
+      expect(scriptContent).toContain('INPUT=')
     })
   })
 

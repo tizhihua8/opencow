@@ -294,29 +294,72 @@ describe('InboxStore', () => {
         createdAt: Date.now()
       }))
 
-      await store.compact()
+      const result = await store.compact()
 
       const msgs = await store.list()
       expect(msgs).toHaveLength(2)
       const ids = msgs.map(m => m.id).sort()
       expect(ids).toEqual(['cmp-2', 'cmp-3'])
+      expect(result.archivedDeleted).toBe(1)
     })
 
-    it('trims to 1000 messages when over limit, removing oldest read messages first', async () => {
-      // Add 1002 messages: 500 unread + 502 read (oldest first)
+    it('removes read messages older than 3 days', async () => {
+      const FOUR_DAYS_AGO = Date.now() - 4 * 24 * 60 * 60 * 1000
+      const ONE_HOUR_AGO = Date.now() - 60 * 60 * 1000
+
+      await store.add(makeHookEvent({
+        id: 'read-old',
+        status: 'read',
+        readAt: FOUR_DAYS_AGO,
+        createdAt: FOUR_DAYS_AGO - 1000,
+      }))
+      await store.add(makeHookEvent({
+        id: 'read-recent',
+        status: 'read',
+        readAt: ONE_HOUR_AGO,
+        createdAt: ONE_HOUR_AGO - 1000,
+      }))
+      await store.add(makeHookEvent({
+        id: 'unread-1',
+        status: 'unread',
+        createdAt: FOUR_DAYS_AGO, // old but unread → never auto-deleted
+      }))
+
+      const result = await store.compact()
+
+      const msgs = await store.list()
+      expect(msgs).toHaveLength(2)
+      const ids = msgs.map(m => m.id).sort()
+      expect(ids).toEqual(['read-recent', 'unread-1'])
+      expect(result.readExpired).toBe(1)
+    })
+
+    it('does not delete unread messages regardless of age', async () => {
+      const THIRTY_DAYS_AGO = Date.now() - 30 * 24 * 60 * 60 * 1000
+
+      await store.add(makeHookEvent({
+        id: 'ancient-unread',
+        status: 'unread',
+        createdAt: THIRTY_DAYS_AGO,
+      }))
+
+      await store.compact()
+
+      const msgs = await store.list()
+      expect(msgs).toHaveLength(1)
+      expect(msgs[0].id).toBe('ancient-unread')
+    })
+
+    it('trims to 500 messages when over limit, removing oldest read messages first', async () => {
+      // Add 502 read messages (all recent so TTL won't catch them)
+      const recentReadAt = Date.now() - 60 * 1000 // 1 minute ago
       const messages: InboxMessage[] = []
       for (let i = 0; i < 502; i++) {
         messages.push(makeHookEvent({
           id: `read-${i.toString().padStart(4, '0')}`,
           status: 'read',
+          readAt: recentReadAt,
           createdAt: 1000 + i // oldest first
-        }))
-      }
-      for (let i = 0; i < 500; i++) {
-        messages.push(makeHookEvent({
-          id: `unread-${i.toString().padStart(4, '0')}`,
-          status: 'unread',
-          createdAt: 2000 + i
         }))
       }
 
@@ -324,23 +367,43 @@ describe('InboxStore', () => {
         await store.add(msg)
       }
 
-      expect(await store.list()).toHaveLength(1002)
+      expect(await store.list()).toHaveLength(502)
 
-      await store.compact()
+      const result = await store.compact()
 
-      const result = await store.list()
-      expect(result).toHaveLength(1000)
+      const remaining = await store.list()
+      expect(remaining).toHaveLength(500)
+      expect(result.trimmed).toBe(2)
 
       // The 2 oldest read messages should have been removed
-      const ids = result.map(m => m.id)
+      const ids = remaining.map(m => m.id)
       expect(ids).not.toContain('read-0000')
       expect(ids).not.toContain('read-0001')
-      // The rest should remain
       expect(ids).toContain('read-0002')
-      // All unread should still be present
-      for (let i = 0; i < 500; i++) {
-        expect(ids).toContain(`unread-${i.toString().padStart(4, '0')}`)
-      }
+    })
+
+    it('returns counts of deleted messages', async () => {
+      const EIGHT_DAYS_AGO = Date.now() - 8 * 24 * 60 * 60 * 1000
+      const FOUR_DAYS_AGO = Date.now() - 4 * 24 * 60 * 60 * 1000
+
+      await store.add(makeHookEvent({
+        id: 'archived-old',
+        status: 'archived',
+        archivedAt: EIGHT_DAYS_AGO,
+        createdAt: EIGHT_DAYS_AGO,
+      }))
+      await store.add(makeHookEvent({
+        id: 'read-stale',
+        status: 'read',
+        readAt: FOUR_DAYS_AGO,
+        createdAt: FOUR_DAYS_AGO,
+      }))
+
+      const result = await store.compact()
+
+      expect(result.archivedDeleted).toBe(1)
+      expect(result.readExpired).toBe(1)
+      expect(result.trimmed).toBe(0)
     })
   })
 })

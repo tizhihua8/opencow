@@ -36,19 +36,16 @@ export const MAX_EXISTING_MEMORIES_IN_PROMPT = 30
 /** Hard timeout for a single LLM extraction query (ms). */
 export const EXTRACTION_TIMEOUT_MS = 30_000
 
-/** Max content chars from a session result for extraction input. */
-export const MAX_SESSION_CONTENT_LENGTH = 6000
-
-/** Number of recent messages to include when resolving session content for extraction. */
-export const RECENT_MESSAGE_WINDOW = 10
+/** Max content chars from a session for extraction input (~3000 tokens). */
+export const MAX_SESSION_CONTENT_LENGTH = 12000
 
 // ─── Pre-Filter ────────────────────────────────────────────────────
 
 /** Min content length to trigger extraction (below this is likely noise). */
 export const MIN_PRE_FILTER_CONTENT_LENGTH = 30
 
-/** Max content length for extraction input (truncated beyond this). */
-export const MAX_PRE_FILTER_CONTENT_LENGTH = 8000
+/** Max content length for extraction input (truncated beyond this). Must be ≥ MAX_SESSION_CONTENT_LENGTH. */
+export const MAX_PRE_FILTER_CONTENT_LENGTH = 12000
 
 /** Max LLM extractions per minute (sliding window). */
 export const MAX_EXTRACTIONS_PER_MINUTE = 5

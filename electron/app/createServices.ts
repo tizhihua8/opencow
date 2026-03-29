@@ -50,7 +50,8 @@ import { RepoSourceRegistry } from '../services/marketplace/repoSourceRegistry'
 import { GitService } from '../services/git/gitService'
 import { createMemoryStorage } from '../memory/storage'
 import { MemoryService } from '../memory/memoryService'
-import { RECENT_MESSAGE_WINDOW, MAX_SESSION_CONTENT_LENGTH } from '../memory/constants'
+import { MAX_SESSION_CONTENT_LENGTH } from '../memory/constants'
+import { prepareExtractionContent } from '../memory/contentPreparer'
 import { GitCommandExecutor } from '../services/git/gitCommandExecutor'
 import { EvoseService } from '../services/evoseService'
 import { ScheduleStore } from '../services/scheduleStore'
@@ -563,20 +564,9 @@ export async function createAppServices(deps: ServiceFactoryDeps): Promise<AppSe
       const session = await orchestrator.getFullSession(sessionId)
       if (!session?.messages?.length) return null
 
-      const recent = session.messages.slice(-RECENT_MESSAGE_WINDOW)
-      const lines: string[] = []
-      for (const msg of recent) {
-        if (msg.role !== 'user' && msg.role !== 'assistant') continue
-        const role = msg.role === 'user' ? 'User' : 'Assistant'
-        for (const block of msg.content) {
-          // Only extract text blocks — tool calls and results are procedural noise
-          // that wastes the token budget and has no memory extraction value
-          if ('text' in block && typeof block.text === 'string') {
-            lines.push(`${role}: ${block.text}`)
-          }
-        }
-      }
-      return lines.join('\n').slice(0, MAX_SESSION_CONTENT_LENGTH) || null
+      // Full messages with turn-based recent-priority compression.
+      // See docs/design/memory-extraction-content-strategy.md for rationale.
+      return prepareExtractionContent(session.messages, MAX_SESSION_CONTENT_LENGTH)
     },
   })
   memoryService.initialize()
