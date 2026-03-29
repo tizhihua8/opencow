@@ -47,8 +47,8 @@ export interface MemoryServiceDeps {
   extractorDeps: MemoryExtractorDeps
   /** Optional adapter injection for testing. Defaults to [SessionInteractionAdapter]. */
   adapters?: InteractionSourceAdapter[]
-  /** Resolve session messages for extraction. Returns concatenated user+assistant text. */
-  getSessionContent?: (sessionId: string) => Promise<string | null>
+  /** Resolve session context for extraction. Returns content text + optional project info. */
+  getSessionContext?: (sessionId: string) => Promise<{ content: string; projectId?: string; projectName?: string } | null>
 }
 
 // ─── MemoryService ─────────────────────────────────────────────────
@@ -61,7 +61,7 @@ export class MemoryService {
   private readonly debounceQueue: MemoryDebounceQueue
   private readonly bus: DataBus
   private readonly adapters: InteractionSourceAdapter[]
-  private readonly getSessionContent: ((sessionId: string) => Promise<string | null>) | null
+  private readonly getSessionContext: ((sessionId: string) => Promise<{ content: string; projectId?: string; projectName?: string } | null>) | null
 
   private unsubscribeBus: (() => void) | null = null
   private unsubscribeFlush: (() => void) | null = null
@@ -84,7 +84,7 @@ export class MemoryService {
       () => this.getExtractionDelayMs(),
     )
     this.adapters = deps.adapters ?? [new SessionInteractionAdapter()]
-    this.getSessionContent = deps.getSessionContent ?? null
+    this.getSessionContext = deps.getSessionContext ?? null
   }
 
   // ── Lifecycle ────────────────────────────────────────────────────
@@ -149,11 +149,14 @@ export class MemoryService {
       const interactionEvent = adapter.toInteractionEvent(eventType, data)
       if (!interactionEvent) continue
 
-      // Resolve content for session events (adapter returns empty placeholder)
-      if (interactionEvent.type === 'session' && !interactionEvent.content && this.getSessionContent) {
-        const content = await this.getSessionContent(interactionEvent.sessionId!)
-        if (!content || content.length < 30) continue
-        interactionEvent.content = content
+      // Resolve content + project context for session events
+      if (interactionEvent.type === 'session' && !interactionEvent.content && this.getSessionContext) {
+        const ctx = await this.getSessionContext(interactionEvent.sessionId!)
+        if (!ctx || ctx.content.length < 30) continue
+        interactionEvent.content = ctx.content
+        // Enrich with project context from session (adapter can't access it from event payload)
+        if (ctx.projectId) interactionEvent.projectId = ctx.projectId
+        if (ctx.projectName) interactionEvent.metadata.projectName = ctx.projectName
       }
 
       if (interactionEvent.content) {

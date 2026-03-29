@@ -38,17 +38,16 @@ export class SessionInteractionAdapter implements InteractionSourceAdapter {
 
     if (!sessionId) return null
 
-    // Content will be resolved later by MemoryService via getSessionContent()
-    // We use a placeholder here — the service will replace it
+    // Content + project context are resolved later by MemoryService via getSessionContext().
+    // SessionOrigin does not carry projectId/projectName — those come from the session snapshot.
     return {
       type: 'session',
-      projectId: (origin?.projectId as string) ?? null,
+      projectId: null,
       sessionId,
-      content: '', // placeholder — resolved by MemoryService
+      content: '',
       metadata: {
         stopReason: typeof data.stopReason === 'string' ? data.stopReason : undefined,
         originSource: typeof origin?.source === 'string' ? origin.source : undefined,
-        projectName: typeof origin?.projectName === 'string' ? origin.projectName : undefined,
       },
       timestamp: Date.now(),
     }

@@ -76,7 +76,7 @@ Each memory must be assigned a scope based on its CONTENT, not where the convers
   Examples: "project uses monorepo structure", "API uses REST not GraphQL", "deploy target is AWS EKS"
 
 Rule of thumb: If the memory would still be true/useful in a DIFFERENT project, it's "user" scope.
-${!params.projectName ? 'Note: No project context — all memories should be "user" scope.' : ''}
+If the content mentions specific project artifacts (table names, file paths, architecture decisions, tech stack choices), it's "project" scope even if no project context is provided.
 
 ## Output Format (JSON only, no markdown fences)
 {

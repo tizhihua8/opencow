@@ -573,13 +573,20 @@ export async function createAppServices(deps: ServiceFactoryDeps): Promise<AppSe
     bus,
     store: memoryStorage,
     extractorDeps: { llmClient: headlessClient },
-    getSessionContent: async (sessionId: string) => {
+    getSessionContext: async (sessionId: string) => {
       const session = await orchestrator.getFullSession(sessionId)
       if (!session?.messages?.length) return null
 
       // Full messages with turn-based recent-priority compression.
       // See docs/design/memory-extraction-content-strategy.md for rationale.
-      return prepareExtractionContent(session.messages, MAX_SESSION_CONTENT_LENGTH)
+      const content = prepareExtractionContent(session.messages, MAX_SESSION_CONTENT_LENGTH)
+      if (!content) return null
+
+      return {
+        content,
+        projectId: session.projectId ?? undefined,
+        projectName: session.projectPath?.split('/').pop() ?? undefined,
+      }
     },
   })
   memoryService.initialize()

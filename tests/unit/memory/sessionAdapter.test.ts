@@ -61,18 +61,19 @@ describe('SessionInteractionAdapter', () => {
   })
 
   describe('toInteractionEvent', () => {
-    it('should create event with empty content placeholder', () => {
+    it('should create event with empty content placeholder and null projectId', () => {
       const event = adapter.toInteractionEvent('command:session:idle', {
         sessionId: 'sess-1',
-        origin: { source: 'agent', projectId: 'proj-1', projectName: 'MyProject' },
+        origin: { source: 'agent' },
         stopReason: 'completed',
       })
 
       expect(event).not.toBeNull()
       expect(event!.type).toBe('session')
       expect(event!.sessionId).toBe('sess-1')
-      expect(event!.projectId).toBe('proj-1')
-      expect(event!.content).toBe('') // placeholder — resolved by MemoryService
+      // projectId is null here — enriched later by MemoryService via getSessionContext()
+      expect(event!.projectId).toBeNull()
+      expect(event!.content).toBe('')
     })
 
     it('should return null without sessionId', () => {
@@ -86,12 +87,13 @@ describe('SessionInteractionAdapter', () => {
     it('should extract metadata from origin', () => {
       const event = adapter.toInteractionEvent('command:session:idle', {
         sessionId: 'sess-1',
-        origin: { source: 'issue', projectId: 'proj-2', projectName: 'TestProject' },
+        origin: { source: 'issue' },
         stopReason: 'completed',
       })
 
       expect(event!.metadata.originSource).toBe('issue')
-      expect(event!.metadata.projectName).toBe('TestProject')
+      // projectName not available from SessionOrigin — enriched by getSessionContext()
+      expect(event!.metadata.projectName).toBeUndefined()
     })
   })
 })
