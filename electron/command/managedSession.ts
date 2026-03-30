@@ -21,6 +21,28 @@ import type {
   EvoseToolCallBlock,
 } from '../../src/shared/types'
 import type { SessionLifecycleEvent } from './sessionStateMachine'
+import { createLogger } from '../platform/logger'
+
+const log = createLogger('ManagedSession')
+
+/**
+ * Dynamic engine switch parameters.
+ *
+ * Structured as an object to keep the call site self-documenting
+ * and extensible without changing the method signature.
+ */
+export interface SwitchEngineParams {
+  /** Target engine to switch to. */
+  newEngine: AIEngineKind
+  /** Conversation summary injected as context for the new engine. */
+  contextSummary?: string
+  /**
+   * Original context system prompt (from issue/project).
+   * Passed explicitly so switchEngine replaces — not appends to —
+   * any prior engine-switch summary, preventing unbounded growth.
+   */
+  originalContext?: string
+}
 
 export interface ManagedSessionRuntimeConfig extends ManagedSessionConfig {
   customMcpServers?: Record<string, Record<string, unknown>>
@@ -181,6 +203,52 @@ export class ManagedSession {
   /** Cheap engine accessor for projection/runtime logic. */
   getEngineKind(): AIEngineKind {
     return this.engineKind
+  }
+
+  /**
+   * Switch the session to a different AI engine.
+   *
+   * Clears engine-specific state (ref, checkpoint) since they cannot cross
+   * engine boundaries. Injects a system event marker into the message timeline.
+   *
+   * This method is purely state mutation — it does NOT create or start a new
+   * lifecycle. The caller (SessionOrchestrator) is responsible for restarting
+   * the lifecycle after calling this.
+   */
+  switchEngine(params: SwitchEngineParams): void {
+    const { newEngine, contextSummary, originalContext } = params
+    const oldEngine = this.engineKind
+    if (oldEngine === newEngine) return
+
+    // 1. Update both storage locations (dual storage invariant)
+    this.engineKind = newEngine
+    this.config = { ...this.config, engineKind: newEngine }
+
+    // 2. Clear engine-specific state (cannot resume cross-engine)
+    this.engineSessionRef = null
+    this.engineState = null
+
+    // 3. Set context system prompt: original context + engine switch summary.
+    //    Replace (not append) to prevent unbounded growth on A→B→A cycles.
+    if (contextSummary) {
+      this.config = {
+        ...this.config,
+        contextSystemPrompt: originalContext
+          ? `${originalContext}\n\n${contextSummary}`
+          : contextSummary,
+      }
+    }
+
+    // 4. Insert engine switch marker into message timeline
+    this.addSystemEvent({ type: 'engine_switch', fromEngine: oldEngine, toEngine: newEngine })
+
+    log.info('switchEngine', {
+      sessionId: this.sessionId,
+      from: oldEngine,
+      to: newEngine,
+      summaryLength: contextSummary?.length ?? 0,
+    })
+    this.lastActivity = Date.now()
   }
 
   /** Cheap model accessor for projection/runtime logic. */
@@ -443,6 +511,8 @@ export class ManagedSession {
    * from outside ManagedSession, making illegal transitions impossible.
    */
   transition(event: SessionLifecycleEvent): void {
+    const fromState = this.state
+    log.debug('transition', { sessionId: this.sessionId, event: event.type, fromState })
     switch (event.type) {
       case 'engine_initialized':
       case 'recover_from_awaiting_input':
@@ -527,6 +597,7 @@ export class ManagedSession {
       this.messages.push({ id, role, content: blocks, timestamp })
     }
 
+    log.debug('addMessage', { sessionId: this.sessionId, messageId: id, role, blockCount: blocks.length })
     this.lastActivity = timestamp
     return id
   }

@@ -85,12 +85,21 @@ export class MemoryExtractor {
     const defaultScope: MemoryScope = event.projectId ? 'project' : 'user'
 
     try {
+      const t0 = Date.now()
       const responseText = await this.deps.llmClient.query({
         systemPrompt: 'You are a memory extraction assistant. Return ONLY valid JSON, no markdown fences or explanation.',
         userMessage: prompt,
         timeoutMs: EXTRACTION_TIMEOUT_MS,
       })
-      return this.parseResponse(responseText, defaultScope)
+      const candidates = this.parseResponse(responseText, defaultScope)
+      log.info('extract succeeded', {
+        source: event.type,
+        contentLength: filtered.length,
+        responseLength: responseText.length,
+        candidateCount: candidates.length,
+        durationMs: Date.now() - t0,
+      })
+      return candidates
     } catch (err) {
       log.error('Extraction failed', err)
       return []
@@ -127,24 +136,38 @@ export class MemoryExtractor {
     }
 
     if (parsed.skipReason) {
-      log.debug('Extraction skipped', { reason: parsed.skipReason })
+      log.debug('Extraction skipped by LLM', { reason: parsed.skipReason })
       return []
     }
 
     if (!Array.isArray(parsed.memories)) {
+      log.debug('parseResponse: no memories array in LLM response', {
+        keys: Object.keys(parsed).join(', '),
+        preview: cleaned.slice(0, 300),
+      })
       return []
     }
 
+    let skippedEmpty = 0
+    let skippedLowConfidence = 0
     const results: CandidateMemory[] = []
     for (const raw of parsed.memories) {
       if (typeof raw !== 'object' || raw === null) continue
       const m = raw as Record<string, unknown>
 
       const content = typeof m.content === 'string' ? m.content.trim() : ''
-      if (!content || content.length > MEMORY_LIMITS.maxContentLength) continue
+      if (!content) { skippedEmpty++; continue }
+      // Trust the LLM: the prompt specifies the length constraint; if the LLM
+      // still exceeds it, the extra content is deemed necessary. Store as-is.
+      if (content.length > MEMORY_LIMITS.maxContentLength) {
+        log.debug('oversized memory content accepted (LLM exceeded prompt constraint)', {
+          length: content.length,
+          limit: MEMORY_LIMITS.maxContentLength,
+        })
+      }
 
       const confidence = clampConfidence(typeof m.confidence === 'number' ? m.confidence : 0.7)
-      if (confidence < MEMORY_LIMITS.minConfidence) continue
+      if (confidence < MEMORY_LIMITS.minConfidence) { skippedLowConfidence++; continue }
 
       const rawCategory = typeof m.category === 'string' ? m.category : 'fact'
       const rawScope = typeof m.scope === 'string' ? m.scope : defaultScope
@@ -162,6 +185,14 @@ export class MemoryExtractor {
         tags: Array.isArray(m.tags) ? (m.tags.filter((t) => typeof t === 'string') as string[]).slice(0, MEMORY_LIMITS.maxTags) : [],
         reasoning: typeof m.reasoning === 'string' ? m.reasoning : '',
         action,
+      })
+    }
+
+    if (results.length === 0 && parsed.memories.length > 0) {
+      log.debug('parseResponse: all candidates filtered out', {
+        rawCount: parsed.memories.length,
+        skippedEmpty,
+        skippedLowConfidence,
       })
     }
 

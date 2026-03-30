@@ -2538,11 +2538,18 @@ export interface CompactBoundaryEvent {
   phase?: 'compacting' | 'done'
 }
 
+export interface EngineSwitchEvent {
+  type: 'engine_switch'
+  fromEngine: AIEngineKind
+  toEngine: AIEngineKind
+}
+
 export type SystemEvent =
   | TaskStartedEvent
   | TaskNotificationEvent
   | HookStatusEvent
   | CompactBoundaryEvent
+  | EngineSwitchEvent
 
 // === Command Phase: Managed Sessions ===
 
@@ -4095,6 +4102,6 @@ export const MEMORY_LIMITS = {
   maxUserMemories: 200,
   maxProjectMemories: 100,
   minConfidence: 0.5,
-  maxContentLength: 500,
+  maxContentLength: 1000,
   maxTags: 10,
 } as const
