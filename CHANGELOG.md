@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.18] - 2026-04-03
+
+### Added
+- Project-level preferences for default entry tab, chat layout, and Files display mode, with full settings UI support
+- Quick file search workflow in Files mode (`Cmd/Ctrl+G`) with open/reveal/editor actions and `:line` navigation support
+
+### Changed
+- Files state management is now isolated by project (open tabs, active file, expanded directories, refresh queues, and search recents)
+- Project settings experience upgraded to tabbed panels with visual option cards and preview-driven configuration
+- Dashboard metric presentation aligned around issue-centric stats while preserving compatibility fields for task-related selector consumers
+
+### Fixed
+- Cross-engine session switches no longer reuse stale startup model overrides from runtime model telemetry
+- File-search and project-settings UI copy now fully follows i18n key usage and locale parity conventions
+
 ## [0.3.17] - 2026-04-02
 
 ### Added
