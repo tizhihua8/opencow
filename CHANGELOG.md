@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.19] - 2026-04-03
+
+### Added
+- Fullscreen IssueFileSheet workspace with split files + session layout for issue-level file chat workflows
+- Project file operation capabilities in Files mode, including create file/folder, rename, delete with undo, and editor tab bulk-close actions
+
+### Changed
+- Files workspace architecture refactored into project-scoped entrypoints so Chat and IssueFileSheet share the same core implementation
+- Session todo projection moved to store-level derived state to improve streaming/footer consistency and reduce repeated message scanning
+
+### Fixed
+- Restored `FilesView` compatibility export to keep legacy imports and existing tests working after FilesView refactor
+- Resolved blocking lint issues in turn-diff ref synchronization and effect projector assignment flow
+
 ## [0.3.18] - 2026-04-03
 
 ### Added
