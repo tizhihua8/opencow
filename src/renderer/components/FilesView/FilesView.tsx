@@ -7,6 +7,7 @@ import { useAppStore, selectProjectId } from '@/stores/appStore'
 import { useFileSync } from '@/hooks/useFileSync'
 import { useGitStatus } from '@/hooks/useGitStatus'
 import { useFileStore } from '@/stores/fileStore'
+import { useProjectFileOperations } from '@/hooks/useProjectFileOperations'
 import { FileTree } from './FileTree'
 import { EditorTabs } from './EditorTabs'
 import { EditorPane } from './EditorPane'
@@ -20,8 +21,28 @@ import { getAppAPI } from '@/windowAPI'
 import { FileSearchOverlay } from './FileSearchOverlay'
 import { createFileSearchNavigationExecutor } from '@/lib/fileSearchNavigation'
 import { normalizeProjectPreferences } from '@shared/projectPreferences'
+import { isInsideEditor } from '@/lib/domUtils'
 
 const EMPTY_OPEN_FILES: ReadonlyArray<{ path: string; name: string }> = []
+
+export interface FilesViewProjectContext {
+  id: string
+  name: string
+  path: string
+}
+
+interface FilesViewLayoutConfig {
+  /** Bottom offset (px) for the search FAB. */
+  searchFabBottomOffsetPx?: number
+}
+
+interface FilesViewCoreProps {
+  project: FilesViewProjectContext
+  projectPreferencesSource?: {
+    defaultFilesDisplayMode: import('@shared/types').ProjectPreferences['defaultFilesDisplayMode'] | null
+  } | null
+  layout?: FilesViewLayoutConfig
+}
 
 // === Mode Toggle Button ===
 
@@ -143,12 +164,13 @@ function IDEMode({
 
 // === Main FilesView ===
 
-export function FilesView(): React.JSX.Element {
+function FilesViewCore({
+  project,
+  projectPreferencesSource = null,
+  layout,
+}: FilesViewCoreProps): React.JSX.Element {
   const { t } = useTranslation('files')
-  const projects = useAppStore((s) => s.projects)
-  const selectedProjectId = useAppStore(selectProjectId)
-  const selectedProject = projects.find((p) => p.id === selectedProjectId)
-  const projectId = selectedProject?.id
+  const projectId = project.id
   const filesDisplayModeByProject = useAppStore((s) => s.filesDisplayModeByProject)
   const setFilesDisplayMode = useAppStore((s) => s.setFilesDisplayMode)
   const openFiles = useFileStore((s) => {
@@ -159,22 +181,28 @@ export function FilesView(): React.JSX.Element {
   const setBrowserSubPath = useFileStore((s) => s.setBrowserSubPath)
   const enqueueEditorJumpIntent = useFileStore((s) => s.enqueueEditorJumpIntent)
   const enqueueTreeRevealIntent = useFileStore((s) => s.enqueueTreeRevealIntent)
+  const peekLatestDeleteUndo = useFileStore((s) => s.peekLatestDeleteUndo)
+  const {
+    undoLatestDelete,
+  } = useProjectFileOperations({
+    projectId,
+    projectPath: project.path,
+  })
 
-  const mode = projectId ? filesDisplayModeByProject[projectId] : undefined
-  const preferredMode = selectedProject
-    ? normalizeProjectPreferences(selectedProject.preferences).defaultFilesDisplayMode
-    : null
+  const mode = filesDisplayModeByProject[projectId]
+  const preferredMode = projectPreferencesSource?.defaultFilesDisplayMode ?? null
+  const searchFabBottomOffsetPx = layout?.searchFabBottomOffsetPx ?? 12
   const modeToggleWrapRef = useRef<HTMLDivElement>(null)
+  const filesViewRootRef = useRef<HTMLDivElement>(null)
   const [modeToggleSafeInset, setModeToggleSafeInset] = useState(180)
   const [searchOpen, setSearchOpen] = useState(false)
   const [browserExternalOpenPath, setBrowserExternalOpenPath] = useState<string | null>(null)
 
   const searchNavigation = useMemo(() => {
-    if (!selectedProject || !projectId) return null
     return createFileSearchNavigationExecutor({
       project: {
         id: projectId,
-        path: selectedProject.path,
+        path: project.path,
       },
       readers: {
         readFileContent: getAppAPI()['read-file-content'],
@@ -194,20 +222,20 @@ export function FilesView(): React.JSX.Element {
     enqueueTreeRevealIntent,
     openFile,
     projectId,
-    selectedProject,
+    project.path,
     setBrowserSubPath,
     setFilesDisplayMode,
   ])
 
   // Coordinate file content sync (Agent writes, external edits, view switches)
-  useFileSync(projectId, selectedProject?.path)
+  useFileSync(projectId, project.path)
 
   // Initialise git status — cold-start IPC, subsequent updates via DataBus
-  useGitStatus(selectedProject?.path)
+  useGitStatus(project.path)
 
   // Auto-detect project type once (only when no cached mode exists)
   useEffect(() => {
-    if (!selectedProject || !projectId || mode) return
+    if (mode) return
 
     // Project preference comes before heuristic detection.
     if (preferredMode) {
@@ -218,19 +246,19 @@ export function FilesView(): React.JSX.Element {
     let cancelled = false
     async function detect(): Promise<void> {
       try {
-        const rootFiles = await getAppAPI()['list-project-files'](selectedProject!.path)
+        const rootFiles = await getAppAPI()['list-project-files'](project.path)
         if (cancelled) return
         const detected = inferDisplayModeFromFiles(
           rootFiles.filter((f) => !f.isDirectory).map((f) => f.name)
         )
-        setFilesDisplayMode(projectId!, detected)
+        setFilesDisplayMode(projectId, detected)
       } catch {
-        if (!cancelled) setFilesDisplayMode(projectId!, 'browser')
+        if (!cancelled) setFilesDisplayMode(projectId, 'browser')
       }
     }
     detect()
     return () => { cancelled = true }
-  }, [projectId, mode, preferredMode, selectedProject, setFilesDisplayMode])
+  }, [mode, preferredMode, project.path, projectId, setFilesDisplayMode])
 
   // Reserve space on the editor tabs row so tabs never render beneath
   // the top-right floating mode switch.
@@ -255,7 +283,6 @@ export function FilesView(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
-    if (!selectedProject) return
     const onKeyDown = (e: KeyboardEvent): void => {
       if (e.key.toLowerCase() !== 'g') return
       if (!(e.metaKey || e.ctrlKey)) return
@@ -265,21 +292,35 @@ export function FilesView(): React.JSX.Element {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [selectedProject])
+  }, [])
 
-  if (!selectedProject || !projectId) {
-    return (
-      <div className="h-full flex items-center justify-center text-[hsl(var(--muted-foreground))] text-sm">
-        {t('view.selectProject')}
-      </div>
-    )
-  }
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key.toLowerCase() !== 'z') return
+      if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return
+      if (event.defaultPrevented) return
+      if (isInsideEditor(event.target)) return
+
+      const root = filesViewRootRef.current
+      if (!root) return
+      const target = event.target
+      if (target instanceof Node && !root.contains(target)) return
+
+      const pendingUndo = peekLatestDeleteUndo(projectId)
+      if (!pendingUndo) return
+
+      event.preventDefault()
+      void undoLatestDelete()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [peekLatestDeleteUndo, projectId, undoLatestDelete])
 
   // Default to 'ide' while detection is pending
   const effectiveMode = mode ?? 'ide'
 
   return (
-    <div className="relative h-full flex flex-col min-h-0">
+    <div ref={filesViewRootRef} className="relative h-full flex flex-col min-h-0">
       {/* Top-right header-height overlay for mode switch */}
       <div
         ref={modeToggleWrapRef}
@@ -294,16 +335,16 @@ export function FilesView(): React.JSX.Element {
       {/* Mode content */}
       {effectiveMode === 'ide' ? (
         <IDEMode
-          projectPath={selectedProject.path}
-          projectName={selectedProject.name}
+          projectPath={project.path}
+          projectName={project.name}
           projectId={projectId}
           modeToggleSafeInset={modeToggleSafeInset}
           onOpenSearch={() => setSearchOpen(true)}
         />
       ) : (
         <FileBrowser
-          projectPath={selectedProject.path}
-          projectName={selectedProject.name}
+          projectPath={project.path}
+          projectName={project.name}
           projectId={projectId}
           onOpenSearch={() => setSearchOpen(true)}
           externalOpenPath={browserExternalOpenPath}
@@ -314,7 +355,7 @@ export function FilesView(): React.JSX.Element {
       <FileSearchOverlay
         open={searchOpen}
         projectId={projectId}
-        projectPath={selectedProject.path}
+        projectPath={project.path}
         currentMode={effectiveMode}
         openFiles={openFiles}
         onClose={() => setSearchOpen(false)}
@@ -328,7 +369,8 @@ export function FilesView(): React.JSX.Element {
         <button
           type="button"
           onClick={() => setSearchOpen(true)}
-          className="absolute bottom-3 right-3 z-30 inline-flex items-center gap-1.5 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--popover))] px-2 py-1 text-[11px] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
+          className="absolute right-3 z-30 inline-flex items-center gap-1.5 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--popover))] px-2 py-1 text-[11px] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
+          style={{ bottom: `${searchFabBottomOffsetPx}px` }}
           aria-label={t('search.fabAria')}
         >
           <Search className="h-3.5 w-3.5" />
@@ -337,4 +379,50 @@ export function FilesView(): React.JSX.Element {
       )}
     </div>
   )
+}
+
+export function FilesViewForSelectedProject({
+  layout,
+}: {
+  layout?: FilesViewLayoutConfig
+} = {}): React.JSX.Element {
+  const { t } = useTranslation('files')
+  const projects = useAppStore((s) => s.projects)
+  const selectedProjectId = useAppStore(selectProjectId)
+  const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null
+
+  if (!selectedProject) {
+    return (
+      <div className="h-full flex items-center justify-center text-[hsl(var(--muted-foreground))] text-sm">
+        {t('view.selectProject')}
+      </div>
+    )
+  }
+
+  const normalizedPreferences = normalizeProjectPreferences(selectedProject.preferences)
+  return (
+    <FilesViewCore
+      project={selectedProject}
+      projectPreferencesSource={{ defaultFilesDisplayMode: normalizedPreferences.defaultFilesDisplayMode }}
+      layout={layout}
+    />
+  )
+}
+
+export function FilesViewForProject({
+  project,
+  layout,
+}: {
+  project: FilesViewProjectContext
+  layout?: FilesViewLayoutConfig
+}): React.JSX.Element {
+  return <FilesViewCore project={project} layout={layout} />
+}
+
+/**
+ * Backward-compatible export used by existing tests and call sites.
+ * Internally delegates to the selected-project entrypoint.
+ */
+export function FilesView(): React.JSX.Element {
+  return <FilesViewForSelectedProject />
 }
